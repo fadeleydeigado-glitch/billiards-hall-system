@@ -1,0 +1,1911 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台球厅管理系统 - 接口测试版</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            color: #1f2937;
+            background: #f3f4f6;
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+        }
+
+        main {
+            width: min(100%, 1280px);
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            margin: 0 0 24px;
+            color: #6b7280;
+        }
+
+        .refresh-button {
+            width: auto;
+            margin: 0 0 20px;
+            padding: 9px 18px;
+        }
+
+        .table-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 180px));
+            gap: 14px;
+        }
+
+        .result-card {
+            padding: 20px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            background: #ffffff;
+        }
+
+        .table-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            min-height: 112px;
+            margin: 0;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            color: #1f2937;
+            background: #ffffff;
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        .table-card-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .table-card-status {
+            color: #6b7280;
+        }
+
+        .table-card-live-details {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .table-card-live-details[hidden] {
+            display: none;
+        }
+
+        .table-card.is-open {
+            border-color: #2563eb;
+            color: #ffffff;
+            background: #2563eb;
+        }
+
+        .result-card h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .table-card:hover {
+            border-color: #2563eb;
+            color: #1d4ed8;
+            background: #eff6ff;
+        }
+
+        .table-card.is-open:hover {
+            border-color: #1d4ed8;
+            color: #ffffff;
+            background: #1d4ed8;
+        }
+
+        .table-card:focus-visible {
+            outline: 3px solid #bfdbfe;
+            outline-offset: 2px;
+        }
+
+        .table-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 12px;
+        }
+
+        .action-card {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 14px;
+            border: 1px solid #e5e7eb;
+            border-radius: 7px;
+            background: #f9fafb;
+        }
+
+        .action-card h3 {
+            margin: 0 0 4px;
+            font-size: 16px;
+        }
+
+        label {
+            display: block;
+            margin: 12px 0 6px;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 9px 10px;
+            border: 1px solid #9ca3af;
+            border-radius: 5px;
+            font-size: 15px;
+        }
+
+        input:focus {
+            border-color: #2563eb;
+            outline: 2px solid #bfdbfe;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 16px;
+            padding: 10px 14px;
+            border: 0;
+            border-radius: 5px;
+            color: #ffffff;
+            background: #2563eb;
+            font-size: 15px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .action-card button {
+            margin-top: auto;
+        }
+
+        .action-card label:last-of-type {
+            margin-bottom: 16px;
+        }
+
+        .product-field-label {
+            display: block;
+            margin: 12px 0 6px;
+            font-weight: 600;
+        }
+
+        .action-card .product-select-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            margin: 0;
+            padding: 9px 10px;
+            border: 1px solid #9ca3af;
+            border-radius: 5px;
+            color: #1f2937;
+            background: #ffffff;
+            font-weight: 400;
+            text-align: left;
+        }
+
+        .product-select-button:hover,
+        .product-select-button[aria-expanded="true"] {
+            border-color: #2563eb;
+            background: #eff6ff;
+        }
+
+        .product-selection-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .product-select-arrow {
+            flex: 0 0 auto;
+            color: #4b5563;
+            font-size: 12px;
+        }
+
+        .product-options {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 220px;
+            margin-top: 6px;
+            padding: 6px;
+            overflow-y: auto;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            background: #ffffff;
+        }
+
+        .product-options[hidden] {
+            display: none;
+        }
+
+        .product-picker .product-option {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            margin: 0;
+            padding: 8px;
+            border-radius: 4px;
+            color: #1f2937;
+            background: #ffffff;
+            font-size: 14px;
+            font-weight: 400;
+            text-align: left;
+        }
+
+        .product-picker .product-option:hover {
+            background: #eff6ff;
+        }
+
+        .product-picker .product-option:disabled,
+        .product-picker .product-option:disabled:hover {
+            color: #9ca3af;
+            background: #f3f4f6;
+            cursor: not-allowed;
+        }
+
+        .product-option-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .product-option-stock {
+            color: #4b5563;
+        }
+
+        .product-option:disabled .product-option-stock {
+            color: #9ca3af;
+        }
+
+        .quantity-control {
+            display: grid;
+            grid-template-columns: 38px minmax(0, 1fr) 38px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .quantity-control button {
+            width: 38px;
+            height: 38px;
+            margin: 0;
+            padding: 0;
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        .quantity-control input {
+            min-width: 0;
+            text-align: center;
+        }
+
+        .quantity-control button:disabled {
+            color: #9ca3af;
+            background: #d1d5db;
+            cursor: not-allowed;
+        }
+
+        .checkout-panel {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .checkout-panel[hidden] {
+            display: none;
+        }
+
+        .checkout-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+
+        .checkout-item {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 10px;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            background: #ffffff;
+            cursor: pointer;
+        }
+
+        .checkout-item.is-unavailable {
+            color: #6b7280;
+            background: #f3f4f6;
+            cursor: not-allowed;
+        }
+
+        .checkout-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin: 2px 0 0;
+            padding: 0;
+        }
+
+        .checkout-item-content {
+            min-width: 0;
+        }
+
+        .checkout-item-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            color: #1f2937;
+            font-weight: 700;
+        }
+
+        .checkout-item.is-unavailable .checkout-item-title {
+            color: #6b7280;
+        }
+
+        .checkout-item-details,
+        .checkout-item-message {
+            margin-top: 4px;
+            color: #4b5563;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .checkout-item-message {
+            color: #b45309;
+        }
+
+        .checkout-summary {
+            margin: 12px 0;
+            font-weight: 700;
+        }
+
+        .checkout-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .action-card .checkout-open-button,
+        .checkout-actions button {
+            margin: 0;
+        }
+
+        .checkout-refresh-button {
+            color: #1d4ed8;
+            background: #eff6ff;
+        }
+
+        .checkout-refresh-button:hover {
+            background: #dbeafe;
+        }
+
+        .payment-order-field-label {
+            display: block;
+            margin: 12px 0 6px;
+            font-weight: 600;
+        }
+
+        .action-card .payment-order-select-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            margin: 0;
+            padding: 9px 10px;
+            border: 1px solid #9ca3af;
+            border-radius: 5px;
+            color: #1f2937;
+            background: #ffffff;
+            font-weight: 400;
+            text-align: left;
+        }
+
+        .payment-order-select-button:hover,
+        .payment-order-select-button[aria-expanded="true"] {
+            border-color: #2563eb;
+            background: #eff6ff;
+        }
+
+        .payment-order-selection-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .payment-order-select-arrow {
+            flex: 0 0 auto;
+            color: #4b5563;
+            font-size: 12px;
+        }
+
+        .payment-order-options {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 260px;
+            margin-top: 6px;
+            padding: 6px;
+            overflow-y: auto;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            background: #ffffff;
+        }
+
+        .payment-order-options[hidden],
+        .payment-order-preview[hidden] {
+            display: none;
+        }
+
+        .payment-order-option {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 3px 10px;
+            width: 100%;
+            margin: 0;
+            padding: 9px;
+            border-radius: 4px;
+            color: #1f2937;
+            background: #ffffff;
+            font-size: 14px;
+            font-weight: 400;
+            text-align: left;
+        }
+
+        .payment-order-option:hover {
+            background: #eff6ff;
+        }
+
+        .payment-order-option-table {
+            font-weight: 700;
+        }
+
+        .payment-order-option-total {
+            font-weight: 700;
+        }
+
+        .payment-order-option-meta {
+            grid-column: 1 / -1;
+            color: #6b7280;
+            font-size: 12px;
+        }
+
+        .payment-order-empty {
+            margin: 6px;
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .payment-order-preview {
+            margin-top: 12px;
+            padding: 12px;
+            border: 1px solid #dbe3ef;
+            border-radius: 6px;
+            background: #ffffff;
+        }
+
+        .payment-order-preview-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .payment-order-preview-table {
+            font-weight: 700;
+        }
+
+        .payment-order-preview-total {
+            color: #1d4ed8;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .payment-order-preview-created {
+            margin: 5px 0 10px;
+            color: #6b7280;
+            font-size: 12px;
+        }
+
+        .payment-order-preview-list {
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .payment-order-detail {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 4px 10px;
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .payment-order-detail-name {
+            font-weight: 700;
+        }
+
+        .payment-order-detail-amount {
+            grid-column: 2;
+            grid-row: 1;
+            font-weight: 700;
+        }
+
+        .payment-order-detail-description {
+            grid-column: 1 / -1;
+            color: #4b5563;
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-line;
+        }
+
+        .table-dialog {
+            width: min(700px, calc(100% - 32px));
+            max-height: calc(100vh - 48px);
+            padding: 0;
+            overflow: hidden;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            background: #ffffff;
+            box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+        }
+
+        .table-dialog::backdrop {
+            background: rgba(15, 23, 42, 0.45);
+        }
+
+        .dialog-panel {
+            max-height: calc(100vh - 48px);
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .dialog-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .dialog-header h2 {
+            margin: 0;
+            font-size: 22px;
+        }
+
+        .dialog-close {
+            width: 36px;
+            height: 36px;
+            margin: 0;
+            padding: 0;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            color: #4b5563;
+            background: #ffffff;
+            font-size: 24px;
+            line-height: 1;
+        }
+
+        .dialog-close:hover {
+            color: #1f2937;
+            background: #f3f4f6;
+        }
+
+        .result-card {
+            margin-top: 20px;
+        }
+
+        #result {
+            min-height: 180px;
+            max-height: 480px;
+            margin: 0;
+            padding: 16px;
+            overflow: auto;
+            border-radius: 6px;
+            color: #e5e7eb;
+            background: #111827;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        #result.success {
+            border-left: 5px solid #22c55e;
+        }
+
+        #result.error {
+            border-left: 5px solid #ef4444;
+        }
+
+        @media (max-width: 560px) {
+            body {
+                padding: 16px;
+            }
+
+            .table-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .table-dialog .table-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>台球厅管理系统 - 接口测试版</h1>
+        <p class="subtitle">按桌台使用当前 FastAPI 服务提供的 5 个业务功能。</p>
+        <button class="refresh-button" id="refresh-button" type="button">刷新</button>
+
+        <section class="table-list" id="table-list" aria-label="桌台列表">
+            <button class="table-card" type="button" data-table-id="1" aria-haspopup="dialog" aria-controls="table-dialog">
+                <span class="table-card-title">1号桌</span>
+                <span class="table-card-status">未开台</span>
+                <span class="table-card-live-details" hidden>
+                    <span data-table-field="start-time"></span>
+                    <span data-table-field="used-time"></span>
+                    <span data-table-field="table-fee"></span>
+                </span>
+            </button>
+            <button class="table-card" type="button" data-table-id="2" aria-haspopup="dialog" aria-controls="table-dialog">
+                <span class="table-card-title">2号桌</span>
+                <span class="table-card-status">未开台</span>
+                <span class="table-card-live-details" hidden>
+                    <span data-table-field="start-time"></span>
+                    <span data-table-field="used-time"></span>
+                    <span data-table-field="table-fee"></span>
+                </span>
+            </button>
+            <button class="table-card" type="button" data-table-id="3" aria-haspopup="dialog" aria-controls="table-dialog">
+                <span class="table-card-title">3号桌</span>
+                <span class="table-card-status">未开台</span>
+                <span class="table-card-live-details" hidden>
+                    <span data-table-field="start-time"></span>
+                    <span data-table-field="used-time"></span>
+                    <span data-table-field="table-fee"></span>
+                </span>
+            </button>
+        </section>
+
+        <dialog class="table-dialog" id="table-dialog" aria-labelledby="table-dialog-title">
+            <div class="dialog-panel">
+                <header class="dialog-header">
+                    <h2 id="table-dialog-title">桌台操作</h2>
+                    <button class="dialog-close" id="dialog-close-button" type="button" aria-label="关闭操作窗口">×</button>
+                </header>
+
+                <div class="table-actions" id="table-actions">
+                    <form class="action-card" data-action="open-table">
+                        <h3>1. 开台</h3>
+                        <button type="submit">开台</button>
+                    </form>
+
+                    <form class="action-card" data-action="close-table">
+                        <h3>2. 关台</h3>
+                        <button type="submit">关台</button>
+                    </form>
+
+                    <form class="action-card" data-action="add-product">
+                        <h3>3. 添加商品消费</h3>
+                        <div class="product-picker">
+                            <span class="product-field-label">商品</span>
+                            <button class="product-select-button" id="product-select-button" type="button" aria-haspopup="listbox" aria-controls="product-options" aria-expanded="false">
+                                <span class="product-selection-text" id="product-selection-text">请选择商品</span>
+                                <span class="product-select-arrow" aria-hidden="true">▼</span>
+                            </button>
+                            <div class="product-options" id="product-options" role="listbox" hidden></div>
+                        </div>
+                        <span class="product-field-label">数量</span>
+                        <div class="quantity-control">
+                            <button id="product-count-decrease" type="button" aria-label="减少商品数量" disabled>−</button>
+                            <input id="product-count-input" name="product_count" type="number" min="1" step="1" value="1" disabled>
+                            <button id="product-count-increase" type="button" aria-label="增加商品数量" disabled>+</button>
+                        </div>
+                        <button type="submit">添加商品</button>
+                    </form>
+
+                    <form class="action-card" data-action="create-unpaid-order">
+                        <h3>4. 选择结账</h3>
+                        <button class="checkout-open-button" id="checkout-open-button" type="button">选择结账</button>
+                        <section class="checkout-panel" id="checkout-panel" hidden>
+                            <div class="checkout-list" id="checkout-list" aria-label="待结算消费明细"></div>
+                            <p class="checkout-summary" id="checkout-summary">已选 0 项，预计合计 ¥0</p>
+                            <div class="checkout-actions">
+                                <button class="checkout-refresh-button" id="checkout-refresh-button" type="button">刷新明细</button>
+                                <button id="checkout-confirm-button" type="submit" disabled>确认结账</button>
+                            </div>
+                        </section>
+                    </form>
+
+                    <form class="action-card" data-action="confirm-payment">
+                        <h3>5. 确认收款</h3>
+                        <div class="payment-order-picker">
+                            <span class="payment-order-field-label">待收款订单</span>
+                            <button class="payment-order-select-button" id="payment-order-select-button" type="button" aria-haspopup="listbox" aria-controls="payment-order-options" aria-expanded="false">
+                                <span class="payment-order-selection-text" id="payment-order-selection-text">请选择待收款订单</span>
+                                <span class="payment-order-select-arrow" aria-hidden="true">▼</span>
+                            </button>
+                            <div class="payment-order-options" id="payment-order-options" role="listbox" hidden></div>
+                        </div>
+                        <section class="payment-order-preview" id="payment-order-preview" aria-label="待收款订单核对明细" hidden></section>
+                        <button id="payment-confirm-button" type="submit" disabled>确认收款</button>
+                    </form>
+                </div>
+            </div>
+        </dialog>
+
+        <section class="result-card">
+            <h2>操作结果</h2>
+            <pre id="result" aria-live="polite">尚未调用接口。</pre>
+        </section>
+    </main>
+
+    <script>
+        const resultElement = document.getElementById("result");
+        const tableDialog = document.getElementById("table-dialog");
+        const tableDialogTitle = document.getElementById("table-dialog-title");
+        const tableActions = document.getElementById("table-actions");
+        const dialogCloseButton = document.getElementById("dialog-close-button");
+        const refreshButton = document.getElementById("refresh-button");
+        const productSelectButton = document.getElementById("product-select-button");
+        const productSelectionText = document.getElementById("product-selection-text");
+        const productOptionsElement = document.getElementById("product-options");
+        const productCountInput = document.getElementById("product-count-input");
+        const productCountDecreaseButton = document.getElementById("product-count-decrease");
+        const productCountIncreaseButton = document.getElementById("product-count-increase");
+        const checkoutOpenButton = document.getElementById("checkout-open-button");
+        const checkoutPanel = document.getElementById("checkout-panel");
+        const checkoutList = document.getElementById("checkout-list");
+        const checkoutSummary = document.getElementById("checkout-summary");
+        const checkoutRefreshButton = document.getElementById("checkout-refresh-button");
+        const checkoutConfirmButton = document.getElementById("checkout-confirm-button");
+        const paymentOrderSelectButton = document.getElementById("payment-order-select-button");
+        const paymentOrderSelectionText = document.getElementById("payment-order-selection-text");
+        const paymentOrderOptionsElement = document.getElementById("payment-order-options");
+        const paymentOrderPreview = document.getElementById("payment-order-preview");
+        const paymentConfirmButton = document.getElementById("payment-confirm-button");
+        let selectedTableId = null;
+        let frontendTableBasicInfo = {};
+        let frontendProductInfo = {};
+        let selectedProductId = null;
+        let productCount = 1;
+        let checkoutOptions = [];
+        let checkoutDraft = {
+            tableId: null,
+            selectedConsumptionIds: new Set(),
+            isSubmitting: false
+        };
+        let isCheckoutLoading = false;
+        let checkoutRequestVersion = 0;
+        let frontendUnpaidOrders = [];
+        let selectedUnpaidOrderId = null;
+        let isPaymentLoading = false;
+        let paymentRequestVersion = 0;
+        let isPaymentSubmitting = false;
+
+        // 保存当前选中的桌号，并打开共用的桌台操作窗口。
+        function openTablePanel(tableId) {
+            const nextTableId = String(tableId);
+
+            if (selectedTableId !== nextTableId) {
+                resetProductSelection();
+                resetCheckoutDraft();
+                resetPaymentSelection();
+            }
+
+            selectedTableId = nextTableId;
+            tableDialogTitle.textContent = `${selectedTableId}号桌`;
+
+            if (!tableDialog.open) {
+                tableDialog.showModal();
+            }
+        }
+
+        // 关闭当前桌台的操作窗口；点击右上角关闭按钮时同步桌台卡片状态。
+        async function closeTablePanel(shouldRefreshTableCards = false) {
+            if (tableDialog.open) {
+                tableDialog.close();
+            }
+
+            resetProductSelection();
+            resetCheckoutDraft();
+            resetPaymentSelection();
+
+            if (shouldRefreshTableCards) {
+                await refreshFrontendData();
+            }
+        }
+
+        // 将接口返回的完整数据格式化后显示在统一结果区域。
+        function showResult(data, isSuccess) {
+            resultElement.textContent = JSON.stringify(data, null, 4);
+            resultElement.className = isSuccess ? "success" : "error";
+        }
+
+        // 统一发送请求并处理 JSON、HTTP 错误和网络错误。
+        async function callApi(url, options, shouldDisplayResult = true) {
+            if (shouldDisplayResult) {
+                resultElement.textContent = "请求处理中……";
+                resultElement.className = "";
+            }
+
+            try {
+                const response = await fetch(url, options);
+                const responseText = await response.text();
+                let responseData;
+
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (parseError) {
+                    responseData = {
+                        status: "error",
+                        error_type: "InvalidJsonResponse",
+                        data: responseText || null,
+                        message: "后端返回的内容不是合法 JSON"
+                    };
+                }
+
+                const isSuccess = response.ok && responseData.status !== "error";
+
+                if (shouldDisplayResult) {
+                    showResult(responseData, isSuccess);
+                }
+
+                return responseData;
+            } catch (networkError) {
+                const errorData = {
+                    status: "error",
+                    error_type: "NetworkError",
+                    data: null,
+                    message: networkError.message
+                };
+
+                if (shouldDisplayResult) {
+                    showResult(errorData, false);
+                }
+
+                return errorData;
+            }
+        }
+
+        // 取得当前选中的商品资料；商品编号只保留在前端临时状态中。
+        function getSelectedProduct() {
+            if (!selectedProductId) {
+                return null;
+            }
+
+            return frontendProductInfo[selectedProductId] || null;
+        }
+
+        // 收起商品选择列表，不重新请求商品数据。
+        function closeProductPicker() {
+            productOptionsElement.hidden = true;
+            productSelectButton.setAttribute("aria-expanded", "false");
+        }
+
+        // 根据当前选中商品和数量更新数量控件状态。
+        function updateProductQuantityControls() {
+            const selectedProduct = getSelectedProduct();
+            const isProductAvailable = selectedProduct && selectedProduct.stock > 0;
+
+            productCountInput.disabled = !isProductAvailable;
+            productCountDecreaseButton.disabled = !isProductAvailable || productCount <= 1;
+            productCountIncreaseButton.disabled = (
+                !isProductAvailable || productCount >= selectedProduct.stock
+            );
+
+            if (isProductAvailable) {
+                productCountInput.min = "1";
+                productCountInput.max = String(selectedProduct.stock);
+                productCountInput.value = String(productCount);
+            } else {
+                productCountInput.value = "1";
+                productCountInput.removeAttribute("max");
+            }
+        }
+
+        // 加、减和手动输入都通过这里维护同一个整数数量状态。
+        function setProductCount(nextProductCount) {
+            const selectedProduct = getSelectedProduct();
+
+            if (!selectedProduct || selectedProduct.stock <= 0) {
+                productCount = 1;
+                updateProductQuantityControls();
+                return;
+            }
+
+            const parsedCount = Number(nextProductCount);
+            const productStock = Number(selectedProduct.stock);
+
+            if (!Number.isInteger(parsedCount)) {
+                productCount = 1;
+            } else {
+                productCount = Math.min(
+                    productStock,
+                    Math.max(1, parsedCount)
+                );
+            }
+
+            updateProductQuantityControls();
+        }
+
+        // 使用当前前端商品快照生成下拉列表。
+        function renderProductOptions() {
+            productOptionsElement.replaceChildren();
+
+            Object.values(frontendProductInfo).forEach((product) => {
+                const productOption = document.createElement("button");
+                const productName = document.createElement("span");
+                const productPrice = document.createElement("span");
+                const productStock = document.createElement("span");
+                const isSoldOut = product.stock === 0;
+
+                productOption.type = "button";
+                productOption.className = "product-option";
+                productOption.dataset.productId = product.product_id;
+                productOption.setAttribute("role", "option");
+                productOption.disabled = isSoldOut;
+
+                productName.className = "product-option-name";
+                productName.textContent = product.product_name;
+                productPrice.textContent = `¥${product.price}`;
+                productStock.className = "product-option-stock";
+                productStock.textContent = isSoldOut ? "已售罄" : `库存${product.stock}`;
+
+                productOption.append(productName, productPrice, productStock);
+                productOptionsElement.append(productOption);
+            });
+        }
+
+        // 选择一种有库存商品，并将数量重置为 1。
+        function selectProduct(productId) {
+            const product = frontendProductInfo[productId];
+
+            if (!product || product.stock === 0) {
+                return;
+            }
+
+            selectedProductId = productId;
+            productCount = 1;
+            productSelectionText.textContent = (
+                `${product.product_name}   ¥${product.price}   库存${product.stock}`
+            );
+            closeProductPicker();
+            updateProductQuantityControls();
+        }
+
+        // 清除本次商品选择，恢复未选择商品时的控件状态。
+        function resetProductSelection() {
+            selectedProductId = null;
+            productCount = 1;
+            productSelectionText.textContent = "请选择商品";
+            closeProductPicker();
+            updateProductQuantityControls();
+        }
+
+        // 把 Unix 秒级时间戳转换为简短本地时间，用于结账明细。
+        function formatCheckoutTime(timestamp) {
+            const date = new Date(Number(timestamp) * 1000);
+
+            if (Number.isNaN(date.getTime())) {
+                return "--";
+            }
+
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            const hours = String(date.getHours()).padStart(2, "0");
+            const minutes = String(date.getMinutes()).padStart(2, "0");
+            return `${month}-${day} ${hours}:${minutes}`;
+        }
+
+        // 关闭或切换桌台时，丢弃仅属于当前弹窗的结账选择缓冲区。
+        function resetCheckoutDraft() {
+            checkoutRequestVersion += 1;
+            checkoutOptions = [];
+            checkoutDraft = {
+                tableId: null,
+                selectedConsumptionIds: new Set(),
+                isSubmitting: false
+            };
+            isCheckoutLoading = false;
+            checkoutList.replaceChildren();
+            checkoutSummary.textContent = "已选 0 项，预计合计 ¥0";
+            checkoutPanel.hidden = true;
+            checkoutOpenButton.hidden = false;
+            checkoutRefreshButton.disabled = false;
+            checkoutConfirmButton.disabled = true;
+        }
+
+        // 根据前端缓冲区更新结账预览；正式订单金额仍由后端重新计算。
+        function updateCheckoutSummary() {
+            const selectedOptions = checkoutOptions.filter((checkoutOption) => (
+                checkoutDraft.selectedConsumptionIds.has(checkoutOption.consumption_id)
+            ));
+            const estimatedTotal = selectedOptions.reduce((total, checkoutOption) => (
+                total + Number(checkoutOption.amount)
+            ), 0);
+
+            checkoutSummary.textContent = (
+                `已选 ${selectedOptions.length} 项，预计合计 ¥${estimatedTotal}`
+            );
+            checkoutConfirmButton.disabled = (
+                checkoutDraft.isSubmitting
+                || selectedOptions.length === 0
+            );
+        }
+
+        // 使用后端刚整理的明细生成可勾选的结账列表，消费编号不显示给用户。
+        function renderCheckoutOptions() {
+            checkoutList.replaceChildren();
+
+            if (checkoutOptions.length === 0) {
+                const emptyMessage = document.createElement("p");
+                emptyMessage.textContent = "当前没有待结算项目";
+                checkoutList.append(emptyMessage);
+                updateCheckoutSummary();
+                return;
+            }
+
+            checkoutOptions.forEach((checkoutOption) => {
+                const item = document.createElement("label");
+                const checkbox = document.createElement("input");
+                const content = document.createElement("div");
+                const title = document.createElement("div");
+                const name = document.createElement("span");
+                const amount = document.createElement("span");
+                const details = document.createElement("div");
+
+                item.className = "checkout-item";
+                checkbox.type = "checkbox";
+                checkbox.dataset.consumptionId = checkoutOption.consumption_id;
+                checkbox.checked = checkoutDraft.selectedConsumptionIds.has(
+                    checkoutOption.consumption_id
+                );
+                checkbox.disabled = checkoutOption.selectable !== true;
+
+                if (checkbox.disabled) {
+                    item.classList.add("is-unavailable");
+                }
+
+                content.className = "checkout-item-content";
+                title.className = "checkout-item-title";
+                details.className = "checkout-item-details";
+                name.textContent = checkoutOption.display_name;
+                amount.textContent = (
+                    typeof checkoutOption.amount === "number"
+                    && Number.isFinite(checkoutOption.amount)
+                )
+                    ? `¥${checkoutOption.amount}`
+                    : "金额待确定";
+
+                if (checkoutOption.consumption_type === "台位费") {
+                    const hasClosedTime = checkoutOption.close_time !== null;
+                    const usedSeconds = hasClosedTime
+                        ? Number(checkoutOption.close_time) - Number(checkoutOption.start_time)
+                        : null;
+                    details.textContent = (
+                        `开台：${formatCheckoutTime(checkoutOption.start_time)}`
+                        + (hasClosedTime && Number.isFinite(usedSeconds)
+                            ? ` · 已用：${formatUsedTime(usedSeconds)}`
+                            : "")
+                    );
+                } else if (checkoutOption.consumption_type === "商品") {
+                    details.textContent = `数量：${checkoutOption.quantity}`;
+                } else {
+                    details.textContent = "消费明细";
+                }
+
+                title.append(name, amount);
+                content.append(title, details);
+                item.append(checkbox, content);
+
+                if (checkoutOption.unavailable_message) {
+                    const message = document.createElement("div");
+                    message.className = "checkout-item-message";
+                    message.textContent = checkoutOption.unavailable_message;
+                    content.append(message);
+                }
+
+                checkoutList.append(item);
+            });
+
+            updateCheckoutSummary();
+        }
+
+        // 打开或手动刷新结账明细时，只取当前桌的真实待结算消费。
+        async function loadCheckoutOptions(tableId) {
+            const requestTableId = String(tableId);
+
+            if (isCheckoutLoading || !requestTableId) {
+                return false;
+            }
+
+            const requestVersion = ++checkoutRequestVersion;
+            isCheckoutLoading = true;
+            checkoutOpenButton.disabled = true;
+            checkoutRefreshButton.disabled = true;
+
+            try {
+                const params = new URLSearchParams({ table_id: requestTableId });
+                const checkoutResult = await callApi(
+                    `/tables/checkout-options?${params.toString()}`,
+                    { method: "GET" },
+                    false
+                );
+
+                if (checkoutResult.status !== "success") {
+                    showResult({
+                        status: "error",
+                        error_type: checkoutResult.error_type,
+                        data: null,
+                        message: checkoutResult.message
+                    }, false);
+                    return false;
+                }
+
+                // 请求期间切换或关闭了桌台时，不能把旧桌的结果放回当前弹窗。
+                if (
+                    checkoutRequestVersion !== requestVersion
+                    || selectedTableId !== requestTableId
+                    || !tableDialog.open
+                ) {
+                    return false;
+                }
+
+                checkoutOptions = checkoutResult.data["消费明细"];
+                checkoutDraft = {
+                    tableId: requestTableId,
+                    selectedConsumptionIds: new Set(),
+                    isSubmitting: false
+                };
+                checkoutPanel.hidden = false;
+                checkoutOpenButton.hidden = true;
+                renderCheckoutOptions();
+                return true;
+            } finally {
+                if (checkoutRequestVersion === requestVersion) {
+                    isCheckoutLoading = false;
+                    checkoutOpenButton.disabled = false;
+                    checkoutRefreshButton.disabled = false;
+                }
+            }
+        }
+
+        // 收起待收款订单列表，不改变当前已选订单。
+        function closePaymentOrderPicker() {
+            paymentOrderOptionsElement.hidden = true;
+            paymentOrderSelectButton.setAttribute("aria-expanded", "false");
+        }
+
+        // 取得当前在前端内存中选中的待收款订单。
+        function getSelectedUnpaidOrder() {
+            return frontendUnpaidOrders.find((unpaidOrder) => (
+                unpaidOrder.order_id === selectedUnpaidOrderId
+            )) || null;
+        }
+
+        // 清除本次收款选择；订单数据不会写入文件。
+        function resetPaymentSelection() {
+            paymentRequestVersion += 1;
+            selectedUnpaidOrderId = null;
+            isPaymentLoading = false;
+            isPaymentSubmitting = false;
+            paymentOrderSelectionText.textContent = "请选择待收款订单";
+            paymentOrderPreview.replaceChildren();
+            paymentOrderPreview.hidden = true;
+            paymentConfirmButton.disabled = true;
+            paymentOrderSelectButton.disabled = false;
+            closePaymentOrderPicker();
+        }
+
+        // 用一笔已选订单生成收款前的完整核对明细。
+        function renderPaymentOrderPreview() {
+            const selectedOrder = getSelectedUnpaidOrder();
+            paymentOrderPreview.replaceChildren();
+
+            if (!selectedOrder) {
+                paymentOrderPreview.hidden = true;
+                paymentConfirmButton.disabled = true;
+                return;
+            }
+
+            const header = document.createElement("div");
+            const tableTitle = document.createElement("span");
+            const total = document.createElement("span");
+            const created = document.createElement("p");
+            const detailsList = document.createElement("div");
+
+            header.className = "payment-order-preview-header";
+            tableTitle.className = "payment-order-preview-table";
+            total.className = "payment-order-preview-total";
+            created.className = "payment-order-preview-created";
+            detailsList.className = "payment-order-preview-list";
+
+            tableTitle.textContent = `${selectedOrder.table_id}号桌`;
+            total.textContent = `应收 ¥${selectedOrder.total_amount}`;
+            created.textContent = `订单创建：${formatCheckoutTime(selectedOrder.created_at)}`;
+            header.append(tableTitle, total);
+
+            selectedOrder.consumption_details.forEach((consumption) => {
+                const detail = document.createElement("div");
+                const name = document.createElement("span");
+                const amount = document.createElement("span");
+                const description = document.createElement("span");
+
+                detail.className = "payment-order-detail";
+                name.className = "payment-order-detail-name";
+                amount.className = "payment-order-detail-amount";
+                description.className = "payment-order-detail-description";
+                name.textContent = consumption.display_name;
+                amount.textContent = `¥${consumption.amount}`;
+
+                if (consumption.consumption_type === "台位费") {
+                    const usedSeconds = (
+                        Number(consumption.close_time)
+                        - Number(consumption.start_time)
+                    );
+                    description.textContent = (
+                        `开台：${formatCheckoutTime(consumption.start_time)} · `
+                        + `关台：${formatCheckoutTime(consumption.close_time)}\n`
+                        + `时长：${formatUsedTime(usedSeconds)} · `
+                        + `¥${consumption.hour_price}/小时`
+                    );
+                } else if (consumption.consumption_type === "商品") {
+                    description.textContent = (
+                        `数量：${consumption.quantity} · 单价：¥${consumption.unit_price}`
+                    );
+                } else {
+                    description.textContent = "消费明细";
+                }
+
+                detail.append(name, amount, description);
+                detailsList.append(detail);
+            });
+
+            paymentOrderPreview.append(header, created, detailsList);
+            paymentOrderPreview.hidden = false;
+            paymentConfirmButton.disabled = isPaymentSubmitting;
+        }
+
+        // 使用最新未支付订单快照生成下拉列表；订单编号只保留在前端状态中。
+        function renderPaymentOrderOptions() {
+            paymentOrderOptionsElement.replaceChildren();
+
+            if (frontendUnpaidOrders.length === 0) {
+                const emptyMessage = document.createElement("p");
+                emptyMessage.className = "payment-order-empty";
+                emptyMessage.textContent = "暂无待收款订单";
+                paymentOrderOptionsElement.append(emptyMessage);
+                return;
+            }
+
+            frontendUnpaidOrders.forEach((unpaidOrder) => {
+                const option = document.createElement("button");
+                const tableTitle = document.createElement("span");
+                const total = document.createElement("span");
+                const meta = document.createElement("span");
+
+                option.type = "button";
+                option.className = "payment-order-option";
+                option.dataset.orderId = unpaidOrder.order_id;
+                option.setAttribute("role", "option");
+                tableTitle.className = "payment-order-option-table";
+                total.className = "payment-order-option-total";
+                meta.className = "payment-order-option-meta";
+
+                tableTitle.textContent = `${unpaidOrder.table_id}号桌`;
+                total.textContent = `¥${unpaidOrder.total_amount}`;
+                meta.textContent = (
+                    `${formatCheckoutTime(unpaidOrder.created_at)} · `
+                    + `共 ${unpaidOrder.consumption_details.length} 项`
+                );
+
+                option.append(tableTitle, total, meta);
+                paymentOrderOptionsElement.append(option);
+            });
+        }
+
+        // 选择一笔订单后，收起列表并展示完整核对明细。
+        function selectUnpaidOrder(orderId) {
+            const selectedOrder = frontendUnpaidOrders.find((unpaidOrder) => (
+                unpaidOrder.order_id === orderId
+            ));
+
+            if (!selectedOrder) {
+                return;
+            }
+
+            selectedUnpaidOrderId = selectedOrder.order_id;
+            paymentOrderSelectionText.textContent = (
+                `${selectedOrder.table_id}号桌 · ¥${selectedOrder.total_amount}`
+                + ` · ${selectedOrder.consumption_details.length} 项`
+            );
+            closePaymentOrderPicker();
+            renderPaymentOrderPreview();
+        }
+
+        // 请求待收款订单小刷新接口，并用最新结果替换前端订单快照。
+        async function loadFrontendUnpaidOrders() {
+            if (isPaymentLoading) {
+                return false;
+            }
+
+            const requestVersion = ++paymentRequestVersion;
+            isPaymentLoading = true;
+            paymentOrderSelectButton.disabled = true;
+
+            try {
+                const unpaidOrdersResult = await callApi(
+                    "/frontend/unpaid-orders",
+                    { method: "GET" },
+                    false
+                );
+
+                if (unpaidOrdersResult.status !== "success") {
+                    showResult({
+                        status: "error",
+                        error_type: unpaidOrdersResult.error_type,
+                        data: null,
+                        message: unpaidOrdersResult.message
+                    }, false);
+                    return false;
+                }
+
+                if (paymentRequestVersion !== requestVersion) {
+                    return false;
+                }
+
+                frontendUnpaidOrders = unpaidOrdersResult.data["未支付订单"];
+
+                // 小刷新后若原选择已经不在真实未支付订单中，前端不允许继续提交。
+                if (selectedUnpaidOrderId && !getSelectedUnpaidOrder()) {
+                    selectedUnpaidOrderId = null;
+                    paymentOrderSelectionText.textContent = "请选择待收款订单";
+                }
+
+                renderPaymentOrderOptions();
+                renderPaymentOrderPreview();
+                return true;
+            } finally {
+                if (paymentRequestVersion === requestVersion) {
+                    isPaymentLoading = false;
+                    paymentOrderSelectButton.disabled = false;
+                }
+            }
+        }
+
+        // 每次从关闭状态打开订单选择区域时，先取得一次最新未支付订单。
+        async function togglePaymentOrderPicker() {
+            if (!paymentOrderOptionsElement.hidden) {
+                closePaymentOrderPicker();
+                return;
+            }
+
+            const isLoaded = await loadFrontendUnpaidOrders();
+
+            if (!isLoaded) {
+                return;
+            }
+
+            paymentOrderOptionsElement.hidden = false;
+            paymentOrderSelectButton.setAttribute("aria-expanded", "true");
+        }
+
+        // 请求商品小刷新接口，并用最新结果替换前端商品快照。
+        async function loadFrontendProducts() {
+            const productsResult = await callApi("/frontend/products", {
+                method: "GET"
+            });
+
+            if (productsResult.status !== "success") {
+                return false;
+            }
+
+            frontendProductInfo = productsResult.data;
+            renderProductOptions();
+            return true;
+        }
+
+        // 每次从关闭状态打开商品选择区域时，先请求一次最新商品数据。
+        async function toggleProductPicker() {
+            if (!productOptionsElement.hidden) {
+                closeProductPicker();
+                return;
+            }
+
+            const isLoaded = await loadFrontendProducts();
+
+            if (!isLoaded) {
+                return;
+            }
+
+            productOptionsElement.hidden = false;
+            productSelectButton.setAttribute("aria-expanded", "true");
+        }
+
+        // 将 Unix 秒级时间戳转换为浏览器本地时间。
+        function formatTableStartTime(startTime) {
+            const startDate = new Date(Number(startTime) * 1000);
+            const hours = String(startDate.getHours()).padStart(2, "0");
+            const minutes = String(startDate.getMinutes()).padStart(2, "0");
+            const seconds = String(startDate.getSeconds()).padStart(2, "0");
+            return `${hours}:${minutes}:${seconds}`;
+        }
+
+        // 将累计使用秒数格式化为小时数可超过 24 的 HH:MM:SS。
+        function formatUsedTime(usedSeconds) {
+            const totalSeconds = Math.max(0, Math.floor(usedSeconds));
+            const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+            const minutes = String(Math.floor(totalSeconds % 3600 / 60)).padStart(2, "0");
+            const seconds = String(totalSeconds % 60).padStart(2, "0");
+            return `${hours}:${minutes}:${seconds}`;
+        }
+
+        // 当前台费仅用于前端展示，正式结算仍以后端结果为准。
+        function calculateDisplayTableFee(usedSeconds, hourPrice) {
+            return Math.floor(usedSeconds / 3600 * hourPrice);
+        }
+
+        // 根据浏览器当前时间更新一张使用中桌台的时长和展示台费。
+        function updateOpenTableCard(tableCard, tableInfo, nowSeconds) {
+            const usedSeconds = Math.max(0, nowSeconds - Number(tableInfo.start_time));
+            tableCard.querySelector('[data-table-field="used-time"]').textContent = `已用：${formatUsedTime(usedSeconds)}`;
+            tableCard.querySelector('[data-table-field="table-fee"]').textContent = `台费：¥${calculateDisplayTableFee(usedSeconds, tableInfo.hour_price)}`;
+        }
+
+        // 用最新刷新快照重新渲染全部桌台卡片。
+        function renderTableCards() {
+            const nowSeconds = Math.floor(Date.now() / 1000);
+
+            document.querySelectorAll(".table-card[data-table-id]").forEach((tableCard) => {
+                const tableId = tableCard.dataset.tableId;
+                const tableInfo = frontendTableBasicInfo[tableId];
+                const statusElement = tableCard.querySelector(".table-card-status");
+                const liveDetailsElement = tableCard.querySelector(".table-card-live-details");
+                const startTimeElement = tableCard.querySelector('[data-table-field="start-time"]');
+
+                if (!tableInfo || tableInfo.is_open !== true) {
+                    tableCard.classList.remove("is-open");
+                    statusElement.hidden = false;
+                    statusElement.textContent = "未开台";
+                    liveDetailsElement.hidden = true;
+                    startTimeElement.textContent = "";
+                    tableCard.querySelector('[data-table-field="used-time"]').textContent = "";
+                    tableCard.querySelector('[data-table-field="table-fee"]').textContent = "";
+                    return;
+                }
+
+                tableCard.classList.add("is-open");
+                statusElement.hidden = true;
+                liveDetailsElement.hidden = false;
+                startTimeElement.textContent = `开始：${formatTableStartTime(tableInfo.start_time)}`;
+                updateOpenTableCard(tableCard, tableInfo, nowSeconds);
+            });
+        }
+
+        // 全部桌台共用一个计时器，只更新正在使用桌台的实时值。
+        function updateOpenTableCards() {
+            const nowSeconds = Math.floor(Date.now() / 1000);
+
+            Object.entries(frontendTableBasicInfo).forEach(([tableId, tableInfo]) => {
+                if (tableInfo.is_open !== true) {
+                    return;
+                }
+
+                const tableCard = document.querySelector(`.table-card[data-table-id="${tableId}"]`);
+
+                if (tableCard) {
+                    updateOpenTableCard(tableCard, tableInfo, nowSeconds);
+                }
+            });
+        }
+
+        // 请求统一刷新数据，并取得第一批桌台基础信息。
+        async function refreshFrontendData() {
+            const refreshResult = await callApi("/frontend/refresh", {
+                method: "GET"
+            }, false);
+
+            if (refreshResult.status !== "success") {
+                showResult({
+                    status: "error",
+                    error_type: refreshResult.error_type,
+                    data: null,
+                    message: refreshResult.message
+                }, false);
+                return false;
+            }
+
+            frontendTableBasicInfo = refreshResult.data["桌台基础信息"];
+            frontendProductInfo = refreshResult.data["商品信息"];
+            renderTableCards();
+
+            if (!productOptionsElement.hidden) {
+                renderProductOptions();
+            }
+
+            console.log("桌台基础信息：", frontendTableBasicInfo);
+            showResult({
+                status: "success",
+                error_type: null,
+                data: null,
+                message: "前端桌台与商品信息已刷新"
+            }, true);
+            return true;
+        }
+
+        // 调用开台接口，桌号通过查询参数传递。
+        function openTable(tableId) {
+            const params = new URLSearchParams({ table_id: tableId });
+            return callApi(`/tables/open?${params.toString()}`, {
+                method: "POST"
+            });
+        }
+
+        // 调用关台接口，桌号通过查询参数传递。
+        function closeTable(tableId) {
+            const params = new URLSearchParams({ table_id: tableId });
+            return callApi(`/tables/close?${params.toString()}`, {
+                method: "POST"
+            });
+        }
+
+        // 调用添加商品消费接口，三个参数都按当前接口要求放入查询参数。
+        function addProductConsumption(tableId, productId, productCount) {
+            const params = new URLSearchParams({
+                table_id: tableId,
+                product_id: productId,
+                product_count: productCount
+            });
+
+            return callApi(`/products/consumption?${params.toString()}`, {
+                method: "POST"
+            });
+        }
+
+        // 调用创建未支付订单接口，提交后端要求的中文字段 JSON。
+        function createUnpaidOrder(tableId, consumptionIds) {
+            const requestBody = {
+                "桌子号码": tableId,
+                "消费记录编号列表": consumptionIds
+            };
+
+            return callApi("/orders/unpaid", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody)
+            }, false);
+        }
+
+        // 结账接口的原始结果可能包含内部消费编号，只向用户展示状态和说明。
+        function showCheckoutOperationResult(result) {
+            showResult({
+                status: result.status,
+                error_type: result.error_type,
+                data: null,
+                message: result.message
+            }, result.status === "success");
+        }
+
+        // 调用确认收款接口，提交包含订单编号的 JSON。
+        function confirmPayment(orderId) {
+            const requestBody = {
+                "订单编号": orderId
+            };
+
+            return callApi("/payments/confirm", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody)
+            }, false);
+        }
+
+        // 收款结果只展示状态和说明，不展示内部订单编号或完整原始数据。
+        function showPaymentOperationResult(result) {
+            showResult({
+                status: result.status,
+                error_type: result.error_type,
+                data: null,
+                message: result.message
+            }, result.status === "success");
+        }
+
+        // 同一张表单的请求进行中时锁定提交按钮，避免连续点击产生重复请求。
+        async function runFormSubmitAction(form, action) {
+            const submitButton = form.querySelector('button[type="submit"]');
+
+            if (!submitButton || submitButton.disabled) {
+                return null;
+            }
+
+            submitButton.disabled = true;
+
+            try {
+                return await action();
+            } finally {
+                submitButton.disabled = false;
+            }
+        }
+
+        refreshButton.addEventListener("click", refreshFrontendData);
+
+        productSelectButton.addEventListener("click", toggleProductPicker);
+
+        productOptionsElement.addEventListener("click", (event) => {
+            const productOption = event.target.closest(".product-option[data-product-id]");
+
+            if (!productOption || productOption.disabled) {
+                return;
+            }
+
+            selectProduct(productOption.dataset.productId);
+        });
+
+        productCountDecreaseButton.addEventListener("click", () => {
+            setProductCount(productCount - 1);
+        });
+
+        productCountIncreaseButton.addEventListener("click", () => {
+            setProductCount(productCount + 1);
+        });
+
+        productCountInput.addEventListener("change", () => {
+            setProductCount(productCountInput.value);
+        });
+
+        paymentOrderSelectButton.addEventListener("click", togglePaymentOrderPicker);
+
+        paymentOrderOptionsElement.addEventListener("click", (event) => {
+            const paymentOrderOption = event.target.closest(
+                ".payment-order-option[data-order-id]"
+            );
+
+            if (!paymentOrderOption) {
+                return;
+            }
+
+            selectUnpaidOrder(paymentOrderOption.dataset.orderId);
+        });
+
+        checkoutOpenButton.addEventListener("click", () => {
+            if (!selectedTableId) {
+                return;
+            }
+
+            loadCheckoutOptions(selectedTableId);
+        });
+
+        checkoutRefreshButton.addEventListener("click", () => {
+            if (!selectedTableId) {
+                return;
+            }
+
+            loadCheckoutOptions(selectedTableId);
+        });
+
+        // 勾选只修改当前桌的前端缓冲区，不会立即发出结账请求。
+        checkoutList.addEventListener("change", (event) => {
+            const checkbox = event.target.closest('input[type="checkbox"][data-consumption-id]');
+
+            if (!checkbox || checkbox.disabled) {
+                return;
+            }
+
+            const checkoutOption = checkoutOptions.find((item) => (
+                item.consumption_id === checkbox.dataset.consumptionId
+            ));
+
+            if (!checkoutOption || checkoutOption.selectable !== true) {
+                return;
+            }
+
+            if (checkbox.checked) {
+                checkoutDraft.selectedConsumptionIds.add(checkoutOption.consumption_id);
+            } else {
+                checkoutDraft.selectedConsumptionIds.delete(checkoutOption.consumption_id);
+            }
+
+            updateCheckoutSummary();
+        });
+
+        // 点击桌台卡片时，读取 table_id 并打开共用操作窗口。
+        document.getElementById("table-list").addEventListener("click", (event) => {
+            const tableCard = event.target.closest(".table-card[data-table-id]");
+
+            if (!tableCard) {
+                return;
+            }
+
+            openTablePanel(tableCard.dataset.tableId);
+        });
+
+        dialogCloseButton.addEventListener("click", () => {
+            closeTablePanel(true);
+        });
+
+        tableDialog.addEventListener("click", (event) => {
+            if (event.target === tableDialog) {
+                closeTablePanel();
+            }
+        });
+
+        // 桌台操作窗口统一监听表单提交，并使用当前选中的 table_id。
+        tableActions.addEventListener("submit", async (event) => {
+            const form = event.target.closest("form[data-action]");
+
+            if (!form) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const tableId = selectedTableId;
+
+            if (!tableId) {
+                return;
+            }
+
+            if (form.dataset.action === "open-table") {
+                await runFormSubmitAction(form, () => openTable(tableId));
+                return;
+            }
+
+            if (form.dataset.action === "close-table") {
+                await runFormSubmitAction(form, () => closeTable(tableId));
+                return;
+            }
+
+            if (form.dataset.action === "add-product") {
+                const selectedProduct = getSelectedProduct();
+
+                if (!selectedProductId || !selectedProduct || selectedProduct.stock <= 0) {
+                    showResult({
+                        status: "error",
+                        error_type: "ProductNotSelected",
+                        data: null,
+                        message: "请先选择有库存的商品"
+                    }, false);
+                    return;
+                }
+
+                setProductCount(productCountInput.value);
+
+                const addProductResult = await runFormSubmitAction(form, () => (
+                    addProductConsumption(
+                        tableId,
+                        selectedProductId,
+                        productCount
+                    )
+                ));
+
+                if (!addProductResult) {
+                    return;
+                }
+
+                if (addProductResult.status === "success") {
+                    resetProductSelection();
+                }
+
+                return;
+            }
+
+            if (form.dataset.action === "create-unpaid-order") {
+                if (
+                    checkoutDraft.tableId !== tableId
+                    || checkoutDraft.selectedConsumptionIds.size === 0
+                ) {
+                    showResult({
+                        status: "error",
+                        error_type: "CheckoutSelectionMissing",
+                        data: null,
+                        message: "请先勾选至少一项待结算消费"
+                    }, false);
+                    return;
+                }
+
+                if (checkoutDraft.isSubmitting) {
+                    return;
+                }
+
+                const consumptionIds = checkoutOptions
+                    .filter((checkoutOption) => (
+                        checkoutOption.selectable === true
+                        && checkoutDraft.selectedConsumptionIds.has(
+                            checkoutOption.consumption_id
+                        )
+                    ))
+                    .map((checkoutOption) => checkoutOption.consumption_id);
+
+                if (consumptionIds.length === 0) {
+                    showResult({
+                        status: "error",
+                        error_type: "CheckoutSelectionMissing",
+                        data: null,
+                        message: "请先勾选至少一项可结账的消费"
+                    }, false);
+                    return;
+                }
+
+                checkoutDraft.isSubmitting = true;
+                updateCheckoutSummary();
+
+                const createOrderResult = await createUnpaidOrder(
+                    tableId,
+                    consumptionIds
+                );
+
+                // 无论后端成功还是拒绝，都清空旧缓冲区并重新取得当前真实明细。
+                resetCheckoutDraft();
+                await loadCheckoutOptions(tableId);
+                showCheckoutOperationResult(createOrderResult);
+
+                return;
+            }
+
+            if (form.dataset.action === "confirm-payment") {
+                const selectedOrder = getSelectedUnpaidOrder();
+
+                if (!selectedOrder) {
+                    showResult({
+                        status: "error",
+                        error_type: "UnpaidOrderNotSelected",
+                        data: null,
+                        message: "请先选择一笔待收款订单"
+                    }, false);
+                    return;
+                }
+
+                if (isPaymentSubmitting) {
+                    return;
+                }
+
+                isPaymentSubmitting = true;
+                paymentConfirmButton.disabled = true;
+
+                const paymentResult = await confirmPayment(
+                    selectedOrder.order_id
+                );
+
+                isPaymentSubmitting = false;
+
+                if (paymentResult.status === "success") {
+                    // 收款成功后才清除选择，并取得最新未支付订单。
+                    resetPaymentSelection();
+                    await loadFrontendUnpaidOrders();
+                } else {
+                    // 失败时仅展示后端原因，保留当前选择，不做额外前端补救。
+                    paymentConfirmButton.disabled = false;
+                }
+
+                showPaymentOperationResult(paymentResult);
+            }
+        });
+
+        setInterval(updateOpenTableCards, 1000);
+        refreshFrontendData();
+    </script>
+</body>
+</html>

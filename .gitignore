@@ -1,0 +1,52 @@
+# ============================================================
+# 台球厅管理系统 - 标准 Python 项目 .gitignore
+# 防止缓存、日志、环境变量等垃圾 / 敏感文件被提交到 GitHub
+# ============================================================
+
+# ---- Python 编译缓存 ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+
+# ---- 虚拟环境 ----
+venv/
+.venv/
+env/
+ENV/
+
+# ---- 环境变量与本地机密配置（防止密码泄露，切勿提交！） ----
+.env
+.env.*
+!.env.example
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# ---- IDE / 编辑器 ----
+.idea/
+.vscode/
+*.sublime-workspace
+
+# ---- 打包与构建产物 ----
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- 测试与类型检查缓存 ----
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- 操作系统杂项 ----
+.DS_Store
+Thumbs.db
+desktop.ini
