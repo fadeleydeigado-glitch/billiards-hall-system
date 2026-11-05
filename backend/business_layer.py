@@ -1,10 +1,6 @@
-import time
 import copy
 
-from io_layer import (
-    one_load_json_file,
-    one_save_json_file,
-    one_change_time_format,
+from .io_layer import (
     one_get_current_time,
     one_insert_core_backup_to_mysql
 )
@@ -822,127 +818,6 @@ def two_create_flow_box(table_id: str, current_time: int, table_info: dict) -> d
         "error_type": None,
         "data": flow_box,
         "message": f"{table_id} 号桌业务流程箱子创建成功"
-    }
-
-def two_update_hall_order(ongoing_order: dict,flow_box: dict) -> dict:
-    # 将流程箱子中的台位消费加入待结算消费，并保存文件
-    #
-    # 前提：
-    # 1. ongoing_order 已经由前面的拿数据函数检查完成。
-    # 2. 指定桌子的消费框真实存在，且已经确认可以开台。
-    # 3. flow_box 已由 two_create_flow_box() 创建。
-    # 4. flow_box 中已经有桌子号码和完整台位消费。
-    #
-    # 整体过程：
-    # 取得本次台位消费
-    # → 复制完整 Ongoing_order，作为本次要修改的数据
-    # → 找到指定桌子的待结算消费
-    # → 确认新消费编号尚未存在
-    # → 复制本次台位消费，并加入待结算消费
-    # → 将修改后的完整数据保存到文件
-
-    # ==================== 第一步：取得本次台位消费 ====================
-
-    table_id = flow_box["桌子号码"]
-    table_consumption = flow_box["台位消费"]
-
-    # 用这条消费内部的编号，作为待结算消费字典的外层 key。
-    consumption_id = table_consumption["消费记录编号"]
-
-    # ==================== 第二步：创建完整的工作副本 ====================
-
-    # 这里复制的是整个 Ongoing_order 数据。
-    #
-    # ongoing_order 保留原样。
-    # updated_ongoing_order 是本次实际要修改、最后要保存的数据。
-    #
-    # 这样，即使后面保存失败，
-    # 传进来的 ongoing_order 也不会被本函数改变。
-    updated_ongoing_order = copy.deepcopy(ongoing_order)
-
-    # ==================== 第三步：定位需要修改的位置 ====================
-
-    # 取得工作副本中，指定桌子的待结算消费字典。
-    # 这一行没有再次复制数据。
-    # pending_consumptions 指向的就是updated_ongoing_order 里面的这一部分字典。
-    # 先确定新增消费的位置：
-    # 完整数据 → 指定桌号 → 该桌的“待结算消费”字典。
-    # 后面对 pending_consumptions 的修改，
-    # 都发生在这张桌子的“待结算消费”里面。
-    # 后面向 pending_consumptions 添加记录，
-    # updated_ongoing_order 中也就有了这条记录。
-    pending_consumptions = (
-        updated_ongoing_order[table_id]["待结算消费"]
-    )
-
-    # ==================== 第四步：防止覆盖旧消费 ====================
-
-    # 当前是在新增消费。
-    # 如果编号已经存在，直接赋值会覆盖旧记录，
-    # 因此必须在修改之前返回错误。
-    if consumption_id in pending_consumptions:
-        return {
-            "status": "error",
-            "error_type": "ConsumptionIdDuplicate",
-            "data": None,
-            "message": (
-                f"{table_id} 号桌已经存在消费记录编号："
-                f"{consumption_id}"
-            )
-        }
-
-    # ==================== 第五步：复制一条消费，并加入内存数据 ====================
-
-    # 下面这一整行按顺序完成两个动作：
-    #
-    # 1. 先执行等号右边：
-    #    copy.deepcopy(table_consumption)
-    #    将流程箱子中的这一条台位消费复制成独立的新字典。
-    #
-    # 2. 再执行等号左边的赋值：
-    #    pending_consumptions[consumption_id] = 复制得到的新字典
-    #    使用消费记录编号作为外层 key，把新字典放到这个编号下面。
-    #
-    # 执行完成后：
-    # updated_ongoing_order 已经包含新增的台位消费。
-    # 这就是本函数真正修改内存数据的位置。
-    #
-    # 新加入的消费与 flow_box 中的原消费彼此独立，
-    # 后面修改其中一条，不会连带改变另一条。
-    pending_consumptions[consumption_id] = copy.deepcopy(
-        table_consumption
-    )
-
-    # ==================== 第六步：保存修改后的完整数据 ====================
-
-    # 前面已经在内存中完成修改。
-    # 现在把包含新消费的整份 updated_ongoing_order 交给底层保存。
-    #
-    # 底层先写临时文件，验证成功后，
-    # 再用临时文件替换正式的 Ongoing_order.json。
-    save_result = one_save_json_file(
-        "Ongoing_order.json",
-        updated_ongoing_order
-    )
-
-    if save_result["status"] != "success":
-        return {
-            "status": "error",
-            "error_type": save_result["error_type"],
-            "data": None,
-            "message": (
-                f"{table_id} 号桌台位消费保存失败："
-                f"{save_result['message']}"
-            )
-        }
-
-    # ==================== 第七步：返回已经保存的完整数据 ====================
-
-    return {
-        "status": "success",
-        "error_type": None,
-        "data": updated_ongoing_order,
-        "message": f"{table_id} 号桌台位消费已加入待结算消费"
     }
 
 # ==================== 关台流程 ====================

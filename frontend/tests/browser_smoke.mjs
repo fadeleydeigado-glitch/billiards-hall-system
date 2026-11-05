@@ -6,8 +6,9 @@ import { join } from "node:path";
 
 const CHROME_PATH = process.env.CHROME_PATH
     || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const PREVIEW_URL = process.env.PREVIEW_URL
-    || "http://127.0.0.1:8765/preview";
+const FRONTEND_URL = process.env.FRONTEND_URL
+    || process.env.PREVIEW_URL
+    || "http://127.0.0.1:8765/";
 const DEBUG_PORT = Number(process.env.CHROME_DEBUG_PORT || 9333);
 
 const sleep = (milliseconds) => new Promise((resolve) => {
@@ -132,7 +133,7 @@ async function main() {
             deviceScaleFactor: 1,
             mobile: false
         });
-        await cdp.command("Page.navigate", { url: PREVIEW_URL });
+        await cdp.command("Page.navigate", { url: FRONTEND_URL });
 
         async function evaluate(expression) {
             const result = await cdp.command("Runtime.evaluate", {

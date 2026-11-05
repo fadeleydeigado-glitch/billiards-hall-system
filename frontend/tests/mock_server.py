@@ -1,11 +1,11 @@
 """
-Small dependency-free mock backend for visual checks of the Vue preview.
+Small dependency-free mock backend for visual checks of the Vue frontend.
 
 It is not used by the real application. Start it with:
 
-    python frontend-vue/tests/mock_server.py
+    python frontend/tests/mock_server.py
 
-Then open http://127.0.0.1:8765/preview.
+Then open http://127.0.0.1:8765/.
 """
 
 import json
@@ -185,12 +185,12 @@ class MockHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
 
-        if parsed.path in ("/preview", "/preview/"):
+        if parsed.path in ("/", "/preview", "/preview/"):
             self.send_file(FRONTEND_DIR / "index.html")
             return
 
-        if parsed.path.startswith("/preview-assets/"):
-            relative_path = parsed.path.removeprefix("/preview-assets/")
+        if parsed.path.startswith("/assets/"):
+            relative_path = parsed.path.removeprefix("/assets/")
             self.send_file(FRONTEND_DIR / relative_path)
             return
 
@@ -278,7 +278,7 @@ class MockHandler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8765), MockHandler)
-    print("Mock preview: http://127.0.0.1:8765/preview")
+    print("Mock frontend: http://127.0.0.1:8765/")
     server.serve_forever()
 
 

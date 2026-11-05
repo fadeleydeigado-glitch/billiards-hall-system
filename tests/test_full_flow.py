@@ -37,7 +37,8 @@ import sys
 import os
 
 # 保证无论从哪里启动，都能导入项目根目录下的模块。
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 # 让中文输出在 Windows 控制台里正常显示。
 try:
@@ -47,11 +48,10 @@ except Exception:
 
 import pymysql
 
-# 数据库连接参数统一从 io_layer 读取，避免重复写用户名 / 密码。
-from io_layer import DB_CONFIG
-import io_layer
-import controller_layer
-from controller_layer import (
+# 数据库连接参数统一从 backend.io_layer 读取，避免重复写用户名 / 密码。
+from backend.io_layer import DB_CONFIG
+from backend import io_layer, controller_layer
+from backend.controller_layer import (
     three_open_table,
     three_close_table,
     three_add_product_consumption,

@@ -11,6 +11,7 @@ test_mysql_write.py
 """
 
 import sys
+import os
 import pymysql
 
 # 让中文输出在 Windows 控制台里正常显示
@@ -19,7 +20,11 @@ try:
 except Exception:
     pass
 
-import io_layer
+# 保证从项目任意位置启动时都能导入 backend 包。
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+from backend import io_layer
 
 
 # ---------------- 测试用假数据 ----------------

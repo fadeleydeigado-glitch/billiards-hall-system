@@ -23,18 +23,23 @@
   - MySQL 8.4 已启动
   - root 密码: 通过本地环境变量 MYSQL_PASSWORD（或 .env 文件）提供，切勿在代码中硬编码
   - mysql-connector-python 已安装 (pip install mysql-connector-python)
-  - 所有 JSON 文件与本脚本在同一目录
+  - 5 个 JSON 文件位于本脚本同目录的 data/ 子目录
 """
 
 import json
 import os
+from pathlib import Path
 import mysql.connector
+from dotenv import load_dotenv
 
 # ============================================================
 # 配置区
 # ============================================================
 DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(DIR)
+DATA_DIR = Path(DIR) / "data"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
 
 MYSQL_CONFIG = {
     "host": "localhost",
@@ -53,7 +58,7 @@ MYSQL_CONFIG = {
 
 def load_json(filename):
     """读取 JSON 文件，返回 Python 字典"""
-    with open(filename, "r", encoding="utf-8") as f:
+    with (DATA_DIR / filename).open("r", encoding="utf-8") as f:
         return json.load(f)
 
 

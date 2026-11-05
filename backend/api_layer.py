@@ -1,10 +1,10 @@
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from controller_layer import (
+from .controller_layer import (
     three_get_frontend_refresh_data,
     three_get_frontend_products_data,
     three_get_frontend_unpaid_orders_data,
@@ -19,30 +19,30 @@ from controller_layer import (
 
 app = FastAPI()
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-PREVIEW_FRONTEND_DIR = PROJECT_ROOT / "frontend-vue"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 
 @app.get("/")
 def frontend_page():
-    return FileResponse("frontend/index.html")
+    return FileResponse(
+        FRONTEND_DIR / "index.html",
+        headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.get("/preview")
 @app.get("/preview/")
 def preview_frontend_page():
-    # 新版 Vue 前端先走独立预览地址，旧首页继续保留，方便对照和回退。
-    return FileResponse(
-        PREVIEW_FRONTEND_DIR / "index.html",
-        headers={"Cache-Control": "no-store"}
-    )
+    # 保留旧地址，兼容已有书签；Vue 前端现在已经是正式首页。
+    return RedirectResponse(url="/", status_code=307)
 
 
-if PREVIEW_FRONTEND_DIR.exists():
+if FRONTEND_DIR.exists():
     app.mount(
-        "/preview-assets",
-        StaticFiles(directory=str(PREVIEW_FRONTEND_DIR)),
-        name="preview-assets"
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIR)),
+        name="frontend-assets"
     )
 
 

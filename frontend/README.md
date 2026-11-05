@@ -1,22 +1,24 @@
-# Vue 前端预览版
+# Vue 前端
 
-这个目录是前端视图层重构的预览版本，独立运行在 `/preview`，原来的
-`frontend/index.html` 暂时保留。
+这是台球厅管理系统的正式前端，由 FastAPI 在 `/` 托管。旧的原生
+HTML 前端已归档到 `archive/native-frontend/`。
 
 ## 结构
 
 ```text
-frontend-vue/
+frontend/
 ├── index.html                 页面结构与 Vue 模板
 ├── styles.css                 统一视觉样式
 ├── app.js                     页面状态、接口调用和业务交互
-├── useTables.js               桌台字典与共享时钟
-├── api.js                     后端接口适配
-├── format.js                  时间、时长的纯展示格式化
-├── components/TableCard.js    唯一的桌卡模板
+├── js/useTables.js            桌台字典与共享时钟
+├── js/api.js                  后端接口适配
+├── js/format.js               时间、时长的纯展示格式化
+├── js/components/TableCard.js 唯一的桌卡模板
 ├── vendor/vue.global.prod.js  本地 Vue 3.5.13，无 CDN 依赖
-└── tests/frontend.test.mjs    轻量检查和格式化单元测试
+└── tests/                     单元测试、模拟接口和浏览器冒烟测试
 ```
+
+页面通过 `/assets/` 加载 CSS、JavaScript 和本地 Vue 运行时。
 
 ## 设计边界
 
@@ -25,20 +27,22 @@ frontend-vue/
 - 前端不计算台费、订单合计或收款金额；金额只展示后端返回值。
 - `TableCard` 是所有桌台共用的唯一模板。
 
-## 本地预览
+## 本地运行
+
+从项目根目录启动：
 
 ```powershell
-uvicorn api_layer:app --reload
+uvicorn backend.api_layer:app --reload
 ```
 
-打开 <http://127.0.0.1:8000/preview>。
+打开 <http://127.0.0.1:8000/>。旧地址 `/preview` 会重定向到 `/`。
 
 ## 检查
 
 不需要安装前端依赖，使用本机 Node 即可：
 
 ```powershell
-cd frontend-vue
+cd frontend
 node --check app.js
 node --test tests/frontend.test.mjs
 ```
@@ -47,14 +51,14 @@ node --test tests/frontend.test.mjs
 
 ```powershell
 # 终端一
-python frontend-vue/tests/mock_server.py
+python frontend/tests/mock_server.py
 
 # 终端二
-cd frontend-vue
+cd frontend
 node tests/browser_smoke.mjs
 ```
 
-模拟页面地址是 <http://127.0.0.1:8765/preview>。浏览器检查会验证：
+模拟页面地址是 <http://127.0.0.1:8765/>。浏览器检查会验证：
 
 - 后端返回四张桌台时页面自动生成四张卡；
 - 开台成功后桌卡自动变化；

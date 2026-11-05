@@ -65,7 +65,7 @@ test("the table card template is defined once and loaded as a component", async 
 
     assert.equal((indexSource.match(/<table-card/g) || []).length, 1);
     assert.equal(indexSource.includes('v-for="table in tableList"'), true);
-    assert.equal(indexSource.includes("/preview-assets/vendor/vue.global.prod.js"), true);
+    assert.equal(indexSource.includes("/assets/vendor/vue.global.prod.js"), true);
     assert.equal(cardSource.includes("template:"), true);
     assert.equal(cardSource.includes("table-card-title"), true);
 });

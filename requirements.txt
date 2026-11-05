@@ -1,0 +1,5 @@
+fastapi>=0.109
+uvicorn>=0.27
+PyMySQL>=1.1
+python-dotenv>=1.0
+mysql-connector-python>=8.4

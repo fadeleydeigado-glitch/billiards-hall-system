@@ -35,6 +35,12 @@
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
 
 # ============================================================
 # 连接库：优先 mysql-connector-python，回退 pymysql

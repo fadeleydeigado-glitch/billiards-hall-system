@@ -1,44 +1,38 @@
-import json
-import time
 import os
-#decimal 模块用于处理浮点数精度问题，MySQL 默认使用 double 类型，容易出现精度问题，所以需要使用 decimal 类型。
+import time
+from pathlib import Path
 from decimal import Decimal
 
-#pymysql 模块用于连接 MySQL 数据库
 import pymysql
 from dotenv import load_dotenv
 
 
 # 在读取数据库环境变量之前加载项目根目录下的 .env 文件。
 # 已存在的系统环境变量优先，避免本地 .env 意外覆盖部署环境配置。
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOG_DIR = PROJECT_ROOT / "logs"
+load_dotenv(PROJECT_ROOT / ".env")
 
 
-# ==================== MySQL 数据库配置（新增） ====================
-# 说明：以下配置与助手只服务于文件末尾新增的 MySQL 函数，
-# 旧版 JSON 函数与新增函数完全独立，互不调用。
-# 所有新增 MySQL 函数共用这一份连接参数，不要在每个函数里重复写连接参数。
-#连接参数：地址加身份
-# 环境变量：用于存储敏感信息，如数据库密码，避免在代码中硬编码密码，提高代码安全性。
+# ==================== MySQL 数据库配置 ====================
+# 所有 MySQL 函数共用这一份连接参数，避免重复配置。
 # 【密码安全提醒】为了防止密码泄露：请确保在本地系统环境变量中设置 MYSQL_PASSWORD，
-# 或在本地配置 .env 文件。放在 .gitignore 文件中，切勿在代码中硬编码密码提交到 GitHub。
+# 或在项目根目录配置 .env 文件。切勿在代码中硬编码密码提交到 GitHub。
 # host / user / database 也支持用环境变量 MYSQL_HOST、MYSQL_USER、MYSQL_DATABASE 覆盖。
 DB_CONFIG = {
-    "host": os.environ.get("MYSQL_HOST", "localhost"),#用于获取环境变量 MYSQL_HOST 的值，如果获取不到，则使用 localhost。
+    "host": os.environ.get("MYSQL_HOST", "localhost"),
     "user": os.environ.get("MYSQL_USER", "root"),
-    "password": os.environ.get("MYSQL_PASSWORD", ""),#密码
+    "password": os.environ.get("MYSQL_PASSWORD", ""),
     "database": os.environ.get("MYSQL_DATABASE", "billiards_hall"),
-    "charset": "utf8mb4"#用于设置字符集，utf8mb4 是 MySQL 支持的 Unicode 字符集，支持中文。
-}#你要去哪里、报什么名字、出示什么证件、进哪个门这一整套动作。
-#全局可见的变量，所有函数都可以访问。
+    "charset": "utf8mb4"
+}
 
 def one_get_mysql_connection():
     # 作用：内部连接助手，按照 DB_CONFIG 建立并返回一个 pymysql 连接。
     # 接收：无。
     # 说明：仅供新增的 MySQL 函数内部使用，连接用完必须由调用方关闭。
     # 连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
-    return pymysql.connect(**DB_CONFIG)#**是解包操作，将字典中的键值对作为关键字参数传递给 pymysql.connect 函数。
-    # 返回：pymysql 与数据库持续链接的通道，已经拨通的电话，持续存在，里面有自带的按钮（ 工具.cursor、.commit、.rollback、.close）
+    return pymysql.connect(**DB_CONFIG)
 
 
 def one_convert_mysql_error(error: Exception, action: str) -> dict:
@@ -56,218 +50,22 @@ def one_convert_mysql_error(error: Exception, action: str) -> dict:
 
 
 def one_convert_mysql_value(value):
-    # 作用：内部类型转换助手，把 MySQL 读出来的值转换成 JSON 时代的类型习惯。
+    # 作用：内部类型转换助手，把 MySQL 读出来的值转换成业务层使用的 Python 类型。
     # 接收：从数据库读出来的单个值。
     # 返回：DECIMAL 转成 int（没有小数）或 float（有小数）；BIGINT 等整数保持 int；None 保持 None。
     # 说明：business 层里写着"金额必须是 int 或 float"的检查，不转换会大面积误判。
     if value is None:
         return None
-    if isinstance(value, Decimal):#判断value是否为Decimal类型,isinstance(a, B) 就是问“a 是不是 B 类型”
+    if isinstance(value, Decimal):
         if value == int(value):
             return int(value)
-        return float(value)#转换成float类型,带着小数点的小数
-    return value#返回value,没改变大小，只有数据类型，防止以后出错
+        return float(value)
+    return value
 
-
-def one_load_json_file(file_name: str) -> dict:
-    # 读取 JSON 文件，并返回统一格式的结果字典
-    try:
-        absolute_path = one_get_safe_path(file_name)  # 先获取安全的绝对路径
-
-        print(f"【底层 I/O】:大掌柜正在执行物理读取 -> {file_name}")
-
-        with open(absolute_path, 'r', encoding='utf-8') as file:  # 以只读模式打开 JSON 文件
-            file_content = json.load(file)  # 把 JSON 文件内容加载成 Python 数据
-
-        print(f"【底层 I/O】:成功将 {file_name} 加载到内存")
-        return {
-            "status": "success",
-            "error_type": None,
-            "data": file_content,
-            "message": f"成功加载文件 {file_name}"
-        }
-
-    # 文件不存在
-    except FileNotFoundError:
-        print(f"【IO 故障】：物理坐标点未找到 {file_name} 文件。")
-        return {
-            "status": "error",
-            "error_type": "FileNotFoundError",
-            "data": None,
-            "message": f"物理硬盘中确实找不到 {file_name} 文件，读取失败。"
-        }
-
-    # JSON 文件格式错误，比如空文件、半截文件、括号不匹配
-    except json.JSONDecodeError:
-        print(f"【IO 故障】：{file_name} 文件内容损毁、为空壳，或不是合法 JSON 格式。")
-        return {
-            "status": "error",
-            "error_type": "JSONDecodeError",
-            "data": None,
-            "message": f"【致命故障】：{file_name} 损坏、为空或格式错误，大掌柜无法解析。"
-        }
-
-    # 系统不允许当前 Python 程序读取这个文件
-    except PermissionError:
-        print(f"【IO 故障】：没有权限读取 {file_name} 文件。")
-        return {
-            "status": "error",
-            "error_type": "PermissionError",
-            "data": None,
-            "message": f"系统没有权限读取 {file_name} 文件，请检查文件权限。"
-        }
-
-    # 传进来的路径其实是一个文件夹，不是 JSON 文件
-    except IsADirectoryError:
-        print(f"【IO 故障】：{file_name} 是一个文件夹，不是 JSON 文件。")
-        return {
-            "status": "error",
-            "error_type": "IsADirectoryError",
-            "data": None,
-            "message": f"{file_name} 是文件夹，不是可读取的 JSON 文件。"
-        }
-
-    # one_get_safe_path 主动拦截了不安全路径，比如 "../xxx.json"
-    except ValueError as e:
-        print(f"【IO 故障】：文件路径不安全：{e}")
-        return {
-            "status": "error",
-            "error_type": "UnsafePathError",
-            "data": None,
-            "message": str(e)
-        }
-
-    # 其他没预料到的错误，统一兜底，避免程序直接崩掉
-    except Exception as e:
-        print(f"【IO 故障】：读取 {file_name} 时发生未知错误：{e}")
-        return {
-            "status": "error",
-            "error_type": type(e).__name__,
-            "data": None,
-            "message": f"读取 {file_name} 时发生未知错误：{e}"
-        }
-
-def one_save_json_file(file_name: str, file_content: dict) -> dict:
-#正式文件：先不动
-#临时文件：先试着写
-#临时文件：再试着读回来验证
-#验证成功：最后才替换正式文件,失败：正式文件保持原样,再清理临时文件
-    temp_path = None  # 临时文件路径，先设为 None，防止前面出错后 finally 又报错
-
-    try:
-        absolute_path = one_get_safe_path(file_name)  # 获取安全的正式文件路径
-        temp_path = absolute_path + ".tmp"  # 临时文件路径，比如 data.json.tmp
-
-        print(f"【底层 I/O】:大掌柜正在执行安全写入 -> {file_name}")
-
-        # 第一步：先写入临时文件，不直接碰原文件
-        # 这样即使 json.dump 失败，坏的也是 .tmp 文件，不是正式文件
-        with open(temp_path, 'w', encoding='utf-8') as file:
-            json.dump(file_content, file, ensure_ascii=False, indent=4)
-
-        # 第二步：把刚写出来的临时文件再读一遍
-        # 目的是确认它确实是合法 JSON，不是空壳，也不是半截文件
-        with open(temp_path, 'r', encoding='utf-8') as file:
-            json.load(file)
-
-        # 第三步：验证成功后，用临时文件替换正式文件
-        # os.replace 可以理解成：把草稿纸确认没问题后，再替换正式文件
-        os.replace(temp_path, absolute_path)
-
-        print(f"【底层 I/O】:成功将 {file_name} 安全写入文件")
-        return {
-            "status": "success",
-            "error_type": None,
-            "data": file_content,
-            "message": f"成功将 {file_name} 写入文件"
-        }
-
-    # file_content 里面有不能转换成 JSON 的东西，比如函数、特殊对象等
-    except TypeError as e:
-        return {
-            "status": "error",
-            "error_type": "JSONSerializeError",
-            "data": None,
-            "message": f"写入失败：传入的数据不能转换成 JSON:{e}"
-        }
-
-    # 系统不允许当前 Python 程序写入这个文件或文件夹
-    except PermissionError as e:
-        return {
-            "status": "error",
-            "error_type": "PermissionError",
-            "data": None,
-            "message": f"写入失败：没有权限写入 {file_name}：{e}"
-        }
-
-    # 传进来的路径是文件夹，不是文件
-    except IsADirectoryError as e:
-        return {
-            "status": "error",
-            "error_type": "IsADirectoryError",
-            "data": None,
-            "message": f"写入失败：{file_name} 是文件夹，不是文件：{e}"
-        }
-
-    # one_get_safe_path 主动拦截了不安全路径，比如 "../xxx.json"
-    except ValueError as e:
-        return {
-            "status": "error",
-            "error_type": "UnsafePathError",
-            "data": None,
-            "message": str(e)
-        }
-
-    # 操作系统层面的文件错误，比如磁盘、路径、替换文件失败等
-    except OSError as e:
-        return {
-            "status": "error",
-            "error_type": "OSError",
-            "data": None,
-            "message": f"写入失败：系统文件操作错误：{e}"
-        }
-
-    # 其他没预料到的错误，统一兜底，避免程序直接崩掉
-    except Exception as e:
-        return {
-            "status": "error",
-            "error_type": type(e).__name__,
-            "data": None,
-            "message": f"写入文件失败：{e}"
-        }
-
-    finally:
-        # 如果写入失败，可能会留下 .tmp 临时文件
-        # 这里负责把残留的临时文件清理掉
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-def one_get_safe_path(file_name: str) -> str:
-    # 根据当前 io_layer.py 所在的文件夹，拼出目标文件的安全绝对路径
-    # 默认前提：JSON 数据文件和 io_layer.py 在同一个项目文件夹里，比如都在 180 文件夹里
-
-    current_code_path = os.path.abspath(__file__)  # abspath = absolute path，获取当前代码文件的绝对路径
-    base_dir = os.path.dirname(current_code_path)  # dirname = directory name，获取当前代码文件所在的文件夹
-
-    final_path = os.path.abspath(os.path.join(base_dir, file_name))
-    # join = 拼接路径
-    # abspath = 再转成绝对路径
-    # 例如：base_dir 是 C:\Users\Lenovo\Desktop\180
-    # file_name 是 data.json
-    # final_path 就是 C:\Users\Lenovo\Desktop\180\data.json
-
-    # 防止 "../xxx.json" 这种路径逃出当前项目文件夹
-    # ".." 表示上一级目录，可能让程序跑到 180 文件夹外面
-    if os.path.commonpath([base_dir, final_path]) != base_dir:
-        raise ValueError(f"非法文件路径：{file_name}")
-
-    return final_path
 
 def one_get_current_time() -> int:
     # 获取当前时间戳，返回 int 类型
-    # time.time() 原本是小数，这里转成整数，方便后面保存到 JSON
+    # time.time() 原本是小数，这里统一转成整数时间戳。
     return int(time.time())
     
 def one_change_time_format(timestamp: int) -> str:
@@ -1204,7 +1002,7 @@ def one_write_business_log(source, flow_name, params, result) -> None:
     # - 按 result["status"] 判断成功还是失败。
     # - 成功时格式：[时间] [来源] [流程名] [参数] [成功]
     # - 失败时格式：[时间] [来源] [流程名] [参数] [失败：{result["message"]}]
-    # - 追加写入 business.log（和 io_layer.py 同目录，编码 utf-8）。
+    # - 追加写入项目根目录 logs/business.log（编码 utf-8）。
     # - 每次一行，行尾换行。
     #
     # 三层保险（重要）：
@@ -1232,9 +1030,9 @@ def one_write_business_log(source, flow_name, params, result) -> None:
 
     # 写文件失败只 print 一行提示，不抛异常，绝不影响主流程。
     try:
-        log_dir = os.path.dirname(os.path.abspath(__file__))
-        log_path = os.path.join(log_dir, "business.log")
-        with open(log_path, "a", encoding="utf-8") as log_file:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = LOG_DIR / "business.log"
+        with log_path.open("a", encoding="utf-8") as log_file:
             log_file.write(log_line + "\n")
     except Exception as error:
         print(f"【业务日志】写入 business.log 失败：{error}")

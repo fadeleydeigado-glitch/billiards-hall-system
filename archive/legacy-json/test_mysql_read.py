@@ -15,9 +15,9 @@ test_mysql_read.py
   one_load_product_by_id_from_mysql(商品编号)  → 该商品在 JSON 里的那一条
 """
 
-import os
 import sys
 import json
+from pathlib import Path
 
 # 让中文输出在 Windows 控制台里正常显示
 try:
@@ -25,14 +25,17 @@ try:
 except Exception:
     pass
 
-import io_layer
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend import io_layer
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
 
 def load_json(file_name):
-    path = os.path.join(BASE_DIR, file_name)
+    path = DATA_DIR / file_name
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 

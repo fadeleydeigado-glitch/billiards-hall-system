@@ -1,6 +1,4 @@
-from io_layer import (
-    one_load_json_file,
-    one_save_json_file,
+from .io_layer import (
     one_get_current_time,
 
     # 前端查询接口使用的 MySQL 函数。
@@ -36,7 +34,7 @@ from io_layer import (
     one_write_business_log
 )
 
-from business_layer import (
+from .business_layer import (
     # 开台及共用的取数、检查函数。
     two_check_billiards_tables,
     two_get_table_info,
