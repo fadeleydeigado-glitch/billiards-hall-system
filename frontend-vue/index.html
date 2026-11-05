@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b4f47">
+    <link rel="icon" href="data:,">
+    <title>台球厅前台 · Vue 预览版</title>
+    <link rel="stylesheet" href="/preview-assets/styles.css">
+</head>
+<body>
+    <div id="app" v-cloak>
+        <main class="app-shell">
+            <header class="hero">
+                <div class="brand-block">
+                    <div class="brand-ball" aria-hidden="true">8</div>
+                    <div>
+                        <p class="eyebrow">BILLIARDS CLUB · FRONT DESK</p>
+                        <h1>台球厅前台</h1>
+                        <p class="hero-copy">
+                            桌台状态与消费金额以 FastAPI 服务端数据为准
+                        </p>
+                    </div>
+                </div>
+
+                <div class="hero-actions">
+                    <span class="live-clock">{{ formatClockTime(nowSeconds) }}</span>
+                    <button
+                        class="button button-light"
+                        type="button"
+                        :disabled="isRefreshing"
+                        @click="refreshAll({ announce: true })"
+                    >
+                        <span v-if="isRefreshing" class="spinner" aria-hidden="true"></span>
+                        {{ isRefreshing ? "刷新中" : "刷新数据" }}
+                    </button>
+                </div>
+            </header>
+
+            <div
+                v-if="notice.text"
+                class="notice"
+                :class="'is-' + notice.tone"
+                role="status"
+                aria-live="polite"
+            >
+                {{ notice.text }}
+            </div>
+
+            <section class="summary-bar" aria-label="桌台概况">
+                <div class="summary-item">
+                    <span>全部桌台</span>
+                    <strong>{{ tableList.length }}</strong>
+                </div>
+                <div class="summary-item">
+                    <span>使用中</span>
+                    <strong>{{ openCount }}</strong>
+                </div>
+                <div class="summary-item">
+                    <span>空闲</span>
+                    <strong>{{ idleCount }}</strong>
+                </div>
+                <p class="summary-note">
+                    开始时间由后端记录，时长只在浏览器中格式化展示
+                </p>
+            </section>
+
+            <section class="board" aria-labelledby="table-board-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">LIVE TABLE BOARD</p>
+                        <h2 id="table-board-title">桌台实时状态</h2>
+                    </div>
+                    <span class="section-hint">点击桌台进入操作</span>
+                </div>
+
+                <div v-if="tableList.length > 0" class="table-grid">
+                    <table-card
+                        v-for="table in tableList"
+                        :key="table.tableId"
+                        :table="table"
+                        :now-seconds="nowSeconds"
+                        @select="openTableDialog"
+                    ></table-card>
+                </div>
+                <div v-else-if="isRefreshing" class="empty-state">
+                    <span class="spinner spinner-dark" aria-hidden="true"></span>
+                    正在读取桌台数据
+                </div>
+                <div v-else class="empty-state">
+                    <strong>还没有桌台配置</strong>
+                    <span>请先在数据库的 billiards_tables 表中添加桌台。</span>
+                </div>
+            </section>
+
+            <details class="result-card">
+                <summary>
+                    接口原始结果
+                    <span
+                        class="result-badge"
+                        :class="'is-' + resultTone"
+                    >{{ resultTone === "success" ? "成功" : resultTone === "error" ? "失败" : "待操作" }}</span>
+                </summary>
+                <pre>{{ resultText }}</pre>
+            </details>
+        </main>
+
+        <dialog
+            ref="dialogElement"
+            class="table-dialog"
+            @close="handleDialogClosed"
+            @click="handleDialogBackdrop"
+        >
+            <div class="dialog-panel">
+                <header class="dialog-header">
+                    <div>
+                        <p class="eyebrow">TABLE SESSION</p>
+                        <h2>{{ dialogTitle }}</h2>
+                        <span
+                            class="dialog-status"
+                            :class="{ 'is-live': selectedTable && selectedTable.isOpen }"
+                        >
+                            {{ selectedTableStatus }}
+                        </span>
+                    </div>
+                    <button
+                        class="icon-button"
+                        type="button"
+                        aria-label="关闭操作窗口"
+                        @click="closeTableDialog"
+                    >×</button>
+                </header>
+
+                <div class="action-grid">
+                    <form class="action-card" data-action="open-table" @submit.prevent="submitOpenTable">
+                        <div class="action-card-heading">
+                            <span class="step-number">01</span>
+                            <div>
+                                <h3>开台</h3>
+                                <p>为当前桌台创建一条新的使用记录。</p>
+                            </div>
+                        </div>
+                        <button
+                            class="button button-primary"
+                            type="submit"
+                            :disabled="actionBusy.open"
+                        >
+                            {{ actionBusy.open ? "处理中…" : "确认开台" }}
+                        </button>
+                    </form>
+
+                    <form class="action-card" data-action="close-table" @submit.prevent="submitCloseTable">
+                        <div class="action-card-heading">
+                            <span class="step-number">02</span>
+                            <div>
+                                <h3>关台</h3>
+                                <p>关闭当前使用记录，由后端计算最终台费。</p>
+                            </div>
+                        </div>
+                        <button
+                            class="button button-secondary"
+                            type="submit"
+                            :disabled="actionBusy.close"
+                        >
+                            {{ actionBusy.close ? "处理中…" : "确认关台" }}
+                        </button>
+                    </form>
+
+                    <form class="action-card action-card-wide" data-action="add-product" @submit.prevent="submitAddProduct">
+                        <div class="action-card-heading">
+                            <span class="step-number">03</span>
+                            <div>
+                                <h3>添加商品消费</h3>
+                                <p>商品价格和库存由后端提供，前端只提交选择结果。</p>
+                            </div>
+                        </div>
+
+                        <div class="form-grid">
+                            <div class="field-block">
+                                <span class="field-label">商品</span>
+                                <button
+                                    class="select-button"
+                                    data-role="product-select"
+                                    type="button"
+                                    aria-haspopup="listbox"
+                                    :aria-expanded="productPickerOpen"
+                                    :disabled="productLoading"
+                                    @click="toggleProductPicker"
+                                >
+                                    <span class="select-button-text">{{ productSelectionLabel }}</span>
+                                    <span class="select-arrow" aria-hidden="true">▾</span>
+                                </button>
+
+                                <div v-if="productPickerOpen" class="option-list" role="listbox">
+                                    <button
+                                        v-for="product in productList"
+                                        :key="product.product_id"
+                                        class="option-row"
+                                        type="button"
+                                        role="option"
+                                        :disabled="product.stock <= 0"
+                                        @click="chooseProduct(product.product_id)"
+                                    >
+                                        <span class="option-name">{{ product.product_name }}</span>
+                                        <span>{{ formatMoney(product.price) }}</span>
+                                        <span class="option-meta">
+                                            {{ product.stock > 0 ? `库存 ${product.stock}` : "已售罄" }}
+                                        </span>
+                                    </button>
+                                    <p v-if="productList.length === 0" class="inline-empty">
+                                        暂无可选商品
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="field-block">
+                                <span class="field-label">数量</span>
+                                <div class="quantity-control">
+                                    <button
+                                        class="quantity-button"
+                                        type="button"
+                                        aria-label="减少商品数量"
+                                        :disabled="!canDecreaseProduct"
+                                        @click="changeProductCount(-1)"
+                                    >−</button>
+                                    <input
+                                        v-model.number="productCount"
+                                        class="quantity-input"
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        :disabled="!selectedProduct"
+                                        @change="normalizeProductCount"
+                                    >
+                                    <button
+                                        class="quantity-button"
+                                        type="button"
+                                        aria-label="增加商品数量"
+                                        :disabled="!canIncreaseProduct"
+                                        @click="changeProductCount(1)"
+                                    >+</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button
+                            class="button button-primary"
+                            type="submit"
+                            :disabled="!selectedProduct || actionBusy.addProduct"
+                        >
+                            {{ actionBusy.addProduct ? "添加中…" : "添加商品" }}
+                        </button>
+                    </form>
+
+                    <form class="action-card" data-action="create-unpaid-order" @submit.prevent="submitCheckout">
+                        <div class="action-card-heading">
+                            <span class="step-number">04</span>
+                            <div>
+                                <h3>选择结账</h3>
+                                <p>勾选待结算项目，正式订单金额由后端生成。</p>
+                            </div>
+                        </div>
+
+                        <button
+                            v-if="!checkout.visible"
+                            class="button button-secondary"
+                            type="button"
+                            data-role="load-checkout"
+                            :disabled="checkout.loading"
+                            @click="loadCheckoutOptions(selectedTableId)"
+                        >
+                            {{ checkout.loading ? "读取中…" : "加载待结算明细" }}
+                        </button>
+
+                        <section v-else class="subpanel">
+                            <div v-if="checkout.loading" class="inline-loading">
+                                <span class="spinner spinner-dark" aria-hidden="true"></span>
+                                正在读取最新明细
+                            </div>
+
+                            <template v-else>
+                                <div v-if="checkout.options.length > 0" class="checkout-list">
+                                    <label
+                                        v-for="option in checkout.options"
+                                        :key="option.consumption_id"
+                                        class="checkout-item"
+                                        :class="{ 'is-unavailable': !option.selectable }"
+                                    >
+                                        <input
+                                            v-model="checkout.selectedIds"
+                                            type="checkbox"
+                                            :value="option.consumption_id"
+                                            :disabled="!option.selectable"
+                                        >
+                                        <span class="checkout-content">
+                                            <span class="checkout-title">
+                                                <span>{{ option.display_name }}</span>
+                                                <strong>{{ checkoutAmount(option) }}</strong>
+                                            </span>
+                                            <span class="checkout-description">
+                                                {{ checkoutDescription(option) }}
+                                            </span>
+                                            <span
+                                                v-if="option.unavailable_message"
+                                                class="checkout-warning"
+                                            >{{ option.unavailable_message }}</span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <p v-else class="inline-empty">当前没有待结算项目</p>
+
+                                <p class="checkout-summary">
+                                    已选 {{ checkoutSelectedCount }} 项
+                                    <span>合计以后端创建订单的结果为准</span>
+                                </p>
+
+                                <div class="button-row">
+                                    <button
+                                        class="button button-quiet"
+                                        type="button"
+                                        :disabled="checkout.loading"
+                                        @click="loadCheckoutOptions(selectedTableId)"
+                                    >刷新明细</button>
+                                    <button
+                                        class="button button-primary"
+                                        type="submit"
+                                        :disabled="checkoutSelectedCount === 0 || checkout.submitting"
+                                    >
+                                        {{ checkout.submitting ? "创建中…" : "确认结账" }}
+                                    </button>
+                                </div>
+                            </template>
+                        </section>
+                    </form>
+
+                    <form class="action-card" data-action="confirm-payment" @submit.prevent="submitPayment">
+                        <div class="action-card-heading">
+                            <span class="step-number">05</span>
+                            <div>
+                                <h3>确认收款</h3>
+                                <p>收款前核对后端订单总金额和消费明细。</p>
+                            </div>
+                        </div>
+
+                        <button
+                            class="select-button"
+                            type="button"
+                            data-role="payment-select"
+                            aria-haspopup="listbox"
+                            :aria-expanded="payment.pickerOpen"
+                            :disabled="payment.loading"
+                            @click="togglePaymentPicker"
+                        >
+                            <span class="select-button-text">{{ paymentSelectionLabel }}</span>
+                            <span class="select-arrow" aria-hidden="true">▾</span>
+                        </button>
+
+                        <div v-if="payment.pickerOpen" class="option-list" role="listbox">
+                            <button
+                                v-for="order in payment.orders"
+                                :key="order.order_id"
+                                class="option-row order-option"
+                                type="button"
+                                role="option"
+                                @click="chooseUnpaidOrder(order.order_id)"
+                            >
+                                <span class="option-name">{{ order.table_id }}号桌</span>
+                                <strong>{{ formatMoney(order.total_amount) }}</strong>
+                                <span class="option-meta">
+                                    {{ formatDateTime(order.created_at) }}
+                                    · {{ order.consumption_details.length }} 项
+                                </span>
+                            </button>
+                            <p v-if="payment.orders.length === 0" class="inline-empty">
+                                暂无待收款订单
+                            </p>
+                        </div>
+
+                        <section v-if="selectedOrder" class="payment-preview">
+                            <header class="payment-preview-header">
+                                <strong>{{ selectedOrder.table_id }}号桌</strong>
+                                <strong class="payment-total">
+                                    {{ formatMoney(selectedOrder.total_amount) }}
+                                </strong>
+                            </header>
+                            <p class="payment-created">
+                                订单创建：{{ formatDateTime(selectedOrder.created_at) }}
+                            </p>
+                            <div class="payment-detail-list">
+                                <div
+                                    v-for="(detail, index) in selectedOrder.consumption_details"
+                                    :key="index"
+                                    class="payment-detail"
+                                >
+                                    <span class="payment-detail-name">{{ detail.display_name }}</span>
+                                    <strong>{{ formatMoney(detail.amount) }}</strong>
+                                    <span class="payment-detail-meta">
+                                        {{ paymentDescription(detail) }}
+                                    </span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <button
+                            class="button button-primary"
+                            type="submit"
+                            :disabled="!selectedOrder || payment.submitting"
+                        >
+                            {{ payment.submitting ? "收款处理中…" : "确认收款" }}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </dialog>
+    </div>
+
+    <div id="boot-error" class="boot-error" role="alert" hidden></div>
+    <script>
+        (function () {
+            function showBootError(message) {
+                const errorElement = document.getElementById("boot-error");
+                if (!errorElement) {
+                    return;
+                }
+
+                errorElement.hidden = false;
+                errorElement.textContent = `前端加载失败：${message}`;
+                document.documentElement.dataset.bootError = "true";
+            }
+
+            window.addEventListener("error", function (event) {
+                if (event.target && event.target.tagName === "SCRIPT") {
+                    showBootError(`脚本无法加载（${event.target.src}）`);
+                    return;
+                }
+
+                showBootError(event.message || "未知脚本错误");
+            }, true);
+
+            window.addEventListener("unhandledrejection", function (event) {
+                const reason = event.reason && event.reason.message
+                    ? event.reason.message
+                    : String(event.reason || "未知异步错误");
+                showBootError(reason);
+            });
+        })();
+    </script>
+    <script src="/preview-assets/vendor/vue.global.prod.js"></script>
+    <script type="module" src="/preview-assets/app.js"></script>
+</body>
+</html>

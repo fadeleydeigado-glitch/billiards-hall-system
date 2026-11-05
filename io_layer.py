@@ -1,39 +1,49 @@
 import json
 import time
 import os
-import pymysql
+#decimal 模块用于处理浮点数精度问题，MySQL 默认使用 double 类型，容易出现精度问题，所以需要使用 decimal 类型。
 from decimal import Decimal
+
+#pymysql 模块用于连接 MySQL 数据库
+import pymysql
+from dotenv import load_dotenv
+
+
+# 在读取数据库环境变量之前加载项目根目录下的 .env 文件。
+# 已存在的系统环境变量优先，避免本地 .env 意外覆盖部署环境配置。
+load_dotenv()
 
 
 # ==================== MySQL 数据库配置（新增） ====================
 # 说明：以下配置与助手只服务于文件末尾新增的 MySQL 函数，
-#       旧版 JSON 函数与新增函数完全独立，互不调用。
+# 旧版 JSON 函数与新增函数完全独立，互不调用。
 # 所有新增 MySQL 函数共用这一份连接参数，不要在每个函数里重复写连接参数。
-#
+#连接参数：地址加身份
+# 环境变量：用于存储敏感信息，如数据库密码，避免在代码中硬编码密码，提高代码安全性。
 # 【密码安全提醒】为了防止密码泄露：请确保在本地系统环境变量中设置 MYSQL_PASSWORD，
-# 或在本地配置 .env 文件。切勿在代码中硬编码密码提交到 GitHub。
+# 或在本地配置 .env 文件。放在 .gitignore 文件中，切勿在代码中硬编码密码提交到 GitHub。
 # host / user / database 也支持用环境变量 MYSQL_HOST、MYSQL_USER、MYSQL_DATABASE 覆盖。
 DB_CONFIG = {
-    "host": os.environ.get("MYSQL_HOST", "localhost"),
+    "host": os.environ.get("MYSQL_HOST", "localhost"),#用于获取环境变量 MYSQL_HOST 的值，如果获取不到，则使用 localhost。
     "user": os.environ.get("MYSQL_USER", "root"),
-    "password": os.environ.get("MYSQL_PASSWORD", ""),
+    "password": os.environ.get("MYSQL_PASSWORD", ""),#密码
     "database": os.environ.get("MYSQL_DATABASE", "billiards_hall"),
-    "charset": "utf8mb4"
-}
-
+    "charset": "utf8mb4"#用于设置字符集，utf8mb4 是 MySQL 支持的 Unicode 字符集，支持中文。
+}#你要去哪里、报什么名字、出示什么证件、进哪个门这一整套动作。
+#全局可见的变量，所有函数都可以访问。
 
 def one_get_mysql_connection():
     # 作用：内部连接助手，按照 DB_CONFIG 建立并返回一个 pymysql 连接。
     # 接收：无。
-    # 返回：pymysql 连接对象。
-    # 说明：仅供新增的 MySQL 函数内部使用，连接用完必须由调用方 close。
-    #       连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
-    return pymysql.connect(**DB_CONFIG)
+    # 说明：仅供新增的 MySQL 函数内部使用，连接用完必须由调用方关闭。
+    # 连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
+    return pymysql.connect(**DB_CONFIG)#**是解包操作，将字典中的键值对作为关键字参数传递给 pymysql.connect 函数。
+    # 返回：pymysql 与数据库持续链接的通道，已经拨通的电话，持续存在，里面有自带的按钮（ 工具.cursor、.commit、.rollback、.close）
 
 
 def one_convert_mysql_error(error: Exception, action: str) -> dict:
-    # 作用：内部异常转换助手，把数据库异常转换成统一的四键错误字典。
-    # 接收：捕获到的数据库异常、本次操作的中文描述（例如 "读取商品总表"）。
+    # 作用：把python的异常转换成统一的四键错误字典。
+    # 接收：捕获到的数据库异常、本次操作的中文描述（例如 "读取商品总表"）。什么操作错了
     # 返回：四键结果字典（status="error"，error_type 为异常类型名）。
     # 说明：这里允许打印错误日志，方便排查故障。
     print(f"【MySQL 故障】{action}失败：{error}")
@@ -52,11 +62,11 @@ def one_convert_mysql_value(value):
     # 说明：business 层里写着"金额必须是 int 或 float"的检查，不转换会大面积误判。
     if value is None:
         return None
-    if isinstance(value, Decimal):
+    if isinstance(value, Decimal):#判断value是否为Decimal类型,isinstance(a, B) 就是问“a 是不是 B 类型”
         if value == int(value):
             return int(value)
-        return float(value)
-    return value
+        return float(value)#转换成float类型,带着小数点的小数
+    return value#返回value,没改变大小，只有数据类型，防止以后出错
 
 
 def one_load_json_file(file_name: str) -> dict:
@@ -268,17 +278,19 @@ def one_change_time_format(timestamp: int) -> str:
 # ==================== 新增：MySQL 读函数（共 7 个） ====================
 
 def one_load_billiards_tables_from_mysql() -> dict:
-    # 作用：读取整张 billiards_tables 表（桌台配置，表很小，直接全量读）。
+    # 作用：读取整张 billiards_tables 表（桌台配置，表很小，直接全量读），省事
     # 接收：无。
-    # 返回：四键结果字典；data 为 {桌号: {"每小时价格": 数字}}；空表时 data 为 {}，status 仍为 "success"。
+    # 返回：四键结果字典；data 为 {桌号: {"每小时价格": 数字}}；空表时 data 为 {}，status 仍为 "success"，表示操作成功，错误是业务层的事。
     connection = None
     try:
         connection = one_get_mysql_connection()
+        #获取连接对象，cursor是游标，用于执行SQL语句，fetchall是获取所有结果，fetchone是获取单个结果，fetchmany是获取多个结果。
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, `每小时价格` FROM billiards_tables")
-            rows = cursor.fetchall()
+            cursor.execute("SELECT id, `每小时价格` FROM billiards_tables")#execute执行，后面是SQL语句
+            rows = cursor.fetchall()#rows是取出来的数据
 
         billiards_tables = {}
+        #遍历取出来的数据（rows）,组装成字典
         for table_id, hour_price in rows:
             billiards_tables[str(table_id)] = {
                 "每小时价格": one_convert_mysql_value(hour_price)
@@ -291,6 +303,7 @@ def one_load_billiards_tables_from_mysql() -> dict:
             "message": "桌台配置表读取成功"
         }
     except Exception as error:
+        #把错误情况起个名字叫error
         return one_convert_mysql_error(error, "读取桌台配置表")
     finally:
         if connection is not None:

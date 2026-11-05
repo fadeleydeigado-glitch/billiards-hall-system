@@ -1,0 +1,11 @@
+{
+    "name": "billiards-hall-frontend-vue",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test": "node --test tests/frontend.test.mjs",
+        "test:browser": "node tests/browser_smoke.mjs",
+        "check": "node --check app.js && node --check js/api.js && node --check js/format.js && node --check js/useTables.js && node --check js/components/TableCard.js"
+    }
+}

@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from controller_layer import (
     three_get_frontend_refresh_data,
@@ -16,10 +19,31 @@ from controller_layer import (
 
 app = FastAPI()
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+PREVIEW_FRONTEND_DIR = PROJECT_ROOT / "frontend-vue"
+
 
 @app.get("/")
 def frontend_page():
     return FileResponse("frontend/index.html")
+
+
+@app.get("/preview")
+@app.get("/preview/")
+def preview_frontend_page():
+    # 新版 Vue 前端先走独立预览地址，旧首页继续保留，方便对照和回退。
+    return FileResponse(
+        PREVIEW_FRONTEND_DIR / "index.html",
+        headers={"Cache-Control": "no-store"}
+    )
+
+
+if PREVIEW_FRONTEND_DIR.exists():
+    app.mount(
+        "/preview-assets",
+        StaticFiles(directory=str(PREVIEW_FRONTEND_DIR)),
+        name="preview-assets"
+    )
 
 
 @app.get("/frontend/refresh")

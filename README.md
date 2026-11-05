@@ -20,7 +20,7 @@
 - **Web 框架**：FastAPI + Uvicorn
 - **数据库**：MySQL 8.x（utf8mb4，中文列名）
 - **数据库驱动**：PyMySQL（主程序与测试）；mysql-connector-python（迁移 / 查看脚本，`check_data.py` 会自动探测二选一）
-- **前端**：原生 HTML / CSS / JavaScript 单页应用
+- **前端**：原生 HTML / CSS / JavaScript 单页应用；新增 Vue 3 组件化预览版（`/preview`）
 - **测试**：纯 Python 断言脚本 + Monkey Patch 回滚测试（不依赖 pytest / unittest）
 
 ## 3. 🏗 系统架构
@@ -29,7 +29,8 @@
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│  前端页面   frontend/index.html（由 FastAPI 托管）            │
+│  前端页面   frontend/index.html（旧版，由 FastAPI 托管）       │
+│            frontend-vue/index.html（Vue 预览版，/preview）     │
 └──────────────────────────────────────────────────────────────┘
                              │ HTTP
 ┌──────────────────────────────────────────────────────────────┐
@@ -77,6 +78,7 @@
 
 - **四键 JSON 规范**：所有流程函数统一返回 `status / error_type / data / message`——成功与失败可被程序精确判定、错误类型机器可读，直接可作为 AI Function Calling 的返回契约。
 - **日志区分 `[人]` / `[AI]`**：业务日志逐行记录 `[时间] [来源] [流程名] [参数] [成功/失败]`；来源默认 `[人]`（网页 / 终端操作），AI 调用时显式传 `[AI]`，AI 的每一次操作都可审计。
+- **AI 员工层设计**：老板报表、折扣规则、顾客自助、两阶段确认与安全边界的完整方案，见 [docs/AI_EMPLOYEE.md](docs/AI_EMPLOYEE.md)。
 
 ### 4.4 严谨的测试保障
 
@@ -94,7 +96,8 @@
 ├── business_layer.py          # 业务层：纯检查 / 计算函数（不碰数据库）
 ├── io_layer.py                # IO 层：MySQL 读写、事务管理器、JSON、日志
 ├── frontend/
-│   └── index.html             # 单页前端：开台 / 商品 / 订单 / 收款
+│   └── index.html             # 旧版单页前端：开台 / 商品 / 订单 / 收款
+├── frontend-vue/              # Vue 3 预览版：组件化桌卡、响应式状态
 ├── test_full_flow.py          # 五大流程 + 边界 + 回滚综合测试
 ├── test_mysql_read.py         # MySQL 读函数专项测试
 ├── test_mysql_write.py        # MySQL 写函数专项测试
@@ -163,6 +166,11 @@ uvicorn api_layer:app --reload
 ```
 
 浏览器打开 <http://127.0.0.1:8000/> 即可使用。
+
+新版 Vue 前端先作为独立预览页运行，旧首页保持不变：
+
+- 旧版：<http://127.0.0.1:8000/>
+- Vue 预览版：<http://127.0.0.1:8000/preview>
 
 ### 6.6 可选：运行测试与自检
 
