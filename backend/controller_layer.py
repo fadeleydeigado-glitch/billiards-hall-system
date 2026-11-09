@@ -48,7 +48,7 @@ from .business_layer import (
     two_get_open_table_consumption,
     two_add_close_time_to_table_consumption,
     two_calculate_table_fee,
-    two_backup_consumption_to_core_blackbox,
+    two_prepare_core_backup,
 
     # 创建未支付订单与清扫消费流程。
     two_get_frontend_checkout_options,
@@ -66,6 +66,14 @@ from .business_layer import (
     two_get_product_info,
     two_check_product_can_be_ordered,
     two_create_product_consumption,
+)
+
+from .outbox import (
+    EVENT_CORE_BACKUP,
+    EVENT_CORE_BACKUP_PRODUCT,
+    build_product_event_payload,
+    build_table_fee_event_payload,
+    one_insert_outbox_event,
 )
 
 
@@ -499,7 +507,7 @@ def three_close_table(table_id: str, source: str = "人") -> dict:
         # 1. 从 MySQL 读取指定桌子的待结算消费。
         # 2. 按顺序调用第二层函数完成检查和关台准备。
         # 3. 检查每一步是否成功，失败时停止后续步骤。
-        # 4. 用事务写回关台结果；核心备份独立尝试，失败不回滚关台。
+        # 4. 用事务写回关台结果，并在同一事务里写 outbox 待办事件。
         #
         # 入口检查由本函数负责，其余由第二层负责。
         # 关台使用原有消费记录，不生成新的消费记录编号。
@@ -585,57 +593,60 @@ def three_close_table(table_id: str, source: str = "人") -> dict:
 
         flow_box = fee_result["data"]
 
-        # ==================== 第八步：用事务更新关台结果 ====================
+        # ==================== 第八步：准备 outbox 备份事件 ====================
+
+        # 备份数据由业务层只做校验和组装。
+        # 真正的备份写入交给 worker，关台事务只负责写一条待办事件。
+        backup_payload_result = two_prepare_core_backup(
+            table_id,
+            flow_box["台位消费"]
+        )
+
+        if backup_payload_result["status"] != "success":
+            return backup_payload_result
+
+        backup_record = backup_payload_result["data"]
+        backup_event_payload = build_table_fee_event_payload(backup_record)
+
+        # ==================== 第九步：事务里更新关台结果 + 写 outbox 便签 ====================
 
         def close_table_operation(cursor):
             table_consumption = flow_box["台位消费"]
 
-            return one_update_ongoing_table_fee_in_mysql(
+            update_result = one_update_ongoing_table_fee_in_mysql(
                 cursor,
                 table_consumption["消费记录编号"],
                 table_consumption["关台时间"],
                 table_consumption["金额"]
             )
 
+            if update_result["status"] != "success":
+                return update_result
+
+            outbox_result = one_insert_outbox_event(
+                cursor,
+                EVENT_CORE_BACKUP,
+                backup_event_payload,
+                table_consumption["关台时间"]
+            )
+
+            if outbox_result["status"] != "success":
+                return outbox_result
+
+            return update_result
+
         transaction_result = one_execute_in_transaction(close_table_operation)
 
         if transaction_result["status"] != "success":
             return transaction_result
 
-        # ==================== 独立尝试备份 ====================
-
-        # 关台已经成功，现在独立尝试备份。
-        # 备份是附属动作，不能让它的失败回滚已完成的关台。
-        # 备份失败时关台仍然算成功，只在返回信息里注明。
-        # 这是有意设计，不是遗漏。
-
-        def backup_operation(cursor):
-            return two_backup_consumption_to_core_blackbox(
-                cursor,
-                table_id,
-                flow_box["台位消费"]
-            )
-
-        backup_result = one_execute_in_transaction(backup_operation)
-
-        if backup_result["status"] != "success":
-            return {
-                "status": "success",
-                "error_type": None,
-                "data": flow_box,
-                "message": (
-                    f"{table_id} 号桌关台成功，但核心备份失败："
-                    f"{backup_result['message']}"
-                )
-            }
-
-        # ==================== 第九步：返回成功 ====================
+        # ==================== 第十步：返回成功 ====================
 
         return {
             "status": "success",
             "error_type": None,
             "data": flow_box,
-            "message": f"{table_id} 号桌关台成功，核心数据已备份"
+            "message": f"{table_id} 号桌关台成功，核心备份已加入异步队列"
         }
 
     result = 关台_内部(table_id)
@@ -788,7 +799,14 @@ def three_create_unpaid_order(selected_data: dict, source: str = "人") -> dict:
 
         # ==================== 第八步：准备订单数据 ====================
 
-        prepare_result = two_create_unpaid_bill(table_id, selected_consumptions)
+        # 订单编号和创建时间共用同一个时间戳，由控制层统一获取。
+        order_time = one_get_current_time()
+
+        prepare_result = two_create_unpaid_bill(
+            table_id,
+            selected_consumptions,
+            order_time
+        )
 
         if prepare_result["status"] != "success":
             return prepare_result
@@ -1156,9 +1174,22 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
 
         product_consumption_data = create_result["data"]
 
-        # ==================== 第九步：事务里写入 ====================
+        # ==================== 第九步：准备商品备份 outbox 事件 ====================
 
-        # 事务内依次完成：插商品消费、扣商品库存。
+        backup_payload_result = two_prepare_core_backup(
+            table_id,
+            product_consumption_data
+        )
+
+        if backup_payload_result["status"] != "success":
+            return backup_payload_result
+
+        backup_record = backup_payload_result["data"]
+        backup_event_payload = build_product_event_payload(backup_record)
+
+        # ==================== 第十步：事务里写入商品消费 + 扣库存 + 写 outbox ====================
+
+        # 事务内依次完成：插商品消费、扣商品库存、写 outbox 待办事件。
         # 任何一步失败，整个事务回滚，数据库保持原样。
         def add_product_operation(cursor):
 
@@ -1190,11 +1221,22 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
             if stock_result["status"] != "success":
                 return stock_result
 
+            # 9.3 写 outbox 待办事件
+            outbox_result = one_insert_outbox_event(
+                cursor,
+                EVENT_CORE_BACKUP_PRODUCT,
+                backup_event_payload,
+                current_time
+            )
+
+            if outbox_result["status"] != "success":
+                return outbox_result
+
             return {
                 "status": "success",
                 "error_type": None,
                 "data": consumption,
-                "message": f"{table_id} 号桌商品消费已写入，库存已扣减"
+                "message": f"{table_id} 号桌商品消费已写入，库存已扣减，备份已入队"
             }
 
         transaction_result = one_execute_in_transaction(add_product_operation)
@@ -1202,13 +1244,13 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
         if transaction_result["status"] != "success":
             return transaction_result
 
-        # ==================== 第十步：返回成功 ====================
+        # ==================== 第十一步：返回成功 ====================
 
         return {
             "status": "success",
             "error_type": None,
             "data": transaction_result["data"],
-            "message": f"{table_id} 号桌商品消费添加成功"
+            "message": f"{table_id} 号桌商品消费添加成功，核心备份已加入异步队列"
         }
 
     result = 加商品_内部(table_id, product_id, product_count)

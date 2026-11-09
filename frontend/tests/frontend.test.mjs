@@ -36,9 +36,11 @@ test("time formatting follows the browser local timezone", () => {
 
 test("money formatting only formats values supplied by the backend", () => {
     assert.equal(formatMoney(36), "¥36");
+    assert.equal(formatMoney("59.97"), "¥59.97");
     assert.equal(formatMoney(0), "¥0");
     assert.equal(formatMoney(null), "金额待确定");
     assert.equal(formatRate(30), "¥30/小时");
+    assert.equal(formatRate("30.00"), "¥30/小时");
 });
 
 test("the frontend no longer contains a second table-fee calculation", async () => {

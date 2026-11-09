@@ -1,9 +1,62 @@
 import copy
-
-from .io_layer import (
-    one_get_current_time,
-    one_insert_core_backup_to_mysql
+from decimal import (
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_UP,
+    localcontext,
 )
+
+
+# 本层只依赖 Python 标准库和入参。
+# 不导入 io_layer，不读写数据库/文件，也不获取系统当前时间。
+
+
+# ==================== 金额计算公共设置 ====================
+
+# 数据库金额列统一是 DECIMAL(10,2)，业务层也统一保留两位小数。
+MONEY_QUANTUM = Decimal("0.01")
+
+# 台费计算使用高精度上下文，避免除法中间结果被过早截断。
+MONEY_CALCULATION_PRECISION = 50
+SECONDS_PER_HOUR = Decimal("3600")
+
+
+def _as_decimal_amount(value):
+    # 把金额统一转成 Decimal。
+    #
+    # - Decimal：直接使用，但拒绝 NaN / Infinity；
+    # - int：精确转换；
+    # - float：只允许作为旧调用方的入口值，先用 str() 还原十进制表示，
+    #   再转成 Decimal，后续绝不参与 float 运算；
+    # - 其他类型：返回 None，由调用方返回统一的格式错误。
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else None
+
+    if isinstance(value, int):
+        return Decimal(value)
+
+    if isinstance(value, float):
+        try:
+            converted = Decimal(str(value))
+        except InvalidOperation:
+            return None
+        return converted if converted.is_finite() else None
+
+    return None
+
+
+def _quantize_money(value: Decimal) -> Decimal:
+    # 金额落库前统一保留两位小数。
+    # 商品单价 × 数量不会产生循环小数，这里主要用于明确金额标度。
+    with localcontext() as context:
+        context.prec = MONEY_CALCULATION_PRECISION
+        return value.quantize(
+            MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP
+        )
 
 
 # ==================== 开台流程 ====================
@@ -69,9 +122,11 @@ def two_check_billiards_tables(billiards_tables: dict) -> dict:
                 "message": f"{table_id} 号桌的 每小时价格 不能为空"
             }
 
-        # 每小时价格 必须是数字。
-        # 这里用 type() 判断，True 和 False 是布尔，会被排除。
-        if type(hour_price) not in (int, float):
+        # 每小时价格 必须是 Decimal 可表示的有限数字。
+        # Decimal 是金额的唯一业务类型，int 只作为兼容输入。
+        hour_price = _as_decimal_amount(hour_price)
+
+        if hour_price is None:
             return {
                 "status": "error",
                 "error_type": "TableHourPriceFormatError",
@@ -595,6 +650,17 @@ def two_get_frontend_table_basic_info(
     # ==================== 第五步：返回正在使用的桌台信息 ====================
 
     open_table_consumption = open_table_consumptions[0]
+    hour_price = _as_decimal_amount(
+        open_table_consumption["每小时价格"]
+    )
+
+    if hour_price is None:
+        return {
+            "status": "error",
+            "error_type": "TableHourPriceFormatError",
+            "data": None,
+            "message": f"{table_id} 号桌的 每小时价格 格式错误"
+        }
 
     return {
         "status": "success",
@@ -603,7 +669,7 @@ def two_get_frontend_table_basic_info(
             "table_id": table_id,
             "is_open": True,
             "start_time": open_table_consumption["开台时间"],
-            "hour_price": open_table_consumption["每小时价格"]
+            "hour_price": hour_price
         },
         "message": f"{table_id} 号桌基础信息获取成功"
     }
@@ -624,8 +690,8 @@ def two_get_frontend_checkout_options(
 
     for consumption_id, consumption in pending_consumptions.items():
         consumption_type = consumption["类型"]
-        amount = consumption.get("金额")
-        amount_is_ready = type(amount) in (int, float)
+        amount = _as_decimal_amount(consumption.get("金额"))
+        amount_is_ready = amount is not None
 
         checkout_option = {
             "consumption_id": consumption_id,
@@ -641,7 +707,9 @@ def two_get_frontend_checkout_options(
                 "display_name": "台费",
                 "start_time": consumption.get("开台时间"),
                 "close_time": consumption["关台时间"],
-                "hour_price": consumption.get("每小时价格"),
+                "hour_price": _as_decimal_amount(
+                    consumption.get("每小时价格")
+                ),
                 "selectable": table_is_closed and amount_is_ready
             })
 
@@ -653,7 +721,9 @@ def two_get_frontend_checkout_options(
         elif consumption_type == "商品":
             checkout_option.update({
                 "display_name": consumption.get("商品名称", "商品"),
-                "unit_price": consumption.get("单价"),
+                "unit_price": _as_decimal_amount(
+                    consumption.get("单价")
+                ),
                 "quantity": consumption.get("数量")
             })
 
@@ -794,6 +864,16 @@ def two_create_flow_box(table_id: str, current_time: int, table_info: dict) -> d
     # 一个流程箱子对应一次独立的台位消费流程
     # 后面的业务函数继续处理同一个 flow_box，不重新创建新的箱子
 
+    hour_price = _as_decimal_amount(table_info.get("每小时价格"))
+
+    if hour_price is None:
+        return {
+            "status": "error",
+            "error_type": "TableHourPriceFormatError",
+            "data": None,
+            "message": f"{table_id} 号桌的 每小时价格 格式错误"
+        }
+
     # T = 台位费
     # 桌号 + 开台时间共同组成这一次台位消费的记录编号
     consumption_id = f"T_{table_id}_{current_time}"
@@ -806,7 +886,7 @@ def two_create_flow_box(table_id: str, current_time: int, table_info: dict) -> d
             "类型": "台位费",
             "开台时间": current_time,
             "关台时间": None,
-            "每小时价格": table_info["每小时价格"],
+            "每小时价格": hour_price,
             "金额": None
         },
 
@@ -962,7 +1042,7 @@ def two_calculate_table_fee(flow_box: dict) -> dict:
 
     start_time = table_consumption["开台时间"]
     end_time = table_consumption["关台时间"]
-    unit_price = table_consumption["每小时价格"]
+    unit_price = _as_decimal_amount(table_consumption["每小时价格"])
 
     # 还没有关台，不能计算最终台费
     if end_time is None:
@@ -971,6 +1051,31 @@ def two_calculate_table_fee(flow_box: dict) -> dict:
             "error_type": "TableNotClosed",
             "data": None,
             "message": "当前台位消费还没有关台，无法计算台费"
+        }
+
+    # 时间戳和每小时价格必须能进入确定性计算。
+    if type(start_time) is not int or type(end_time) is not int:
+        return {
+            "status": "error",
+            "error_type": "TableFeeTimeFormatError",
+            "data": None,
+            "message": "开台时间或关台时间格式错误，应该是整数时间戳"
+        }
+
+    if unit_price is None:
+        return {
+            "status": "error",
+            "error_type": "TableHourPriceFormatError",
+            "data": None,
+            "message": "每小时价格格式错误，应该是数字"
+        }
+
+    if unit_price <= 0:
+        return {
+            "status": "error",
+            "error_type": "TableHourPriceInvalid",
+            "data": None,
+            "message": "每小时价格必须大于 0"
         }
 
     # 这是业务数据本身不合理，不属于格式检查
@@ -982,13 +1087,20 @@ def two_calculate_table_fee(flow_box: dict) -> dict:
             "message": "开台时间大于关台时间，无法计算台费"
         }
 
-    duration = end_time - start_time
-    played_hours = duration / 3600
+    duration = Decimal(end_time - start_time)
 
-    table_fee = played_hours * unit_price
-
-    # 当前收费规则：直接舍弃小数部分
-    table_fee = int(table_fee)
+    # 台费 = 时长秒数 × 每小时价格 ÷ 3600。
+    #
+    # 这里不先算 played_hours 再乘价格，因为 2500 / 3600 = 0.69444...
+    # 是循环小数，有限精度 Decimal 也可能得到 0.999999... 后向下取整成 0。
+    # Decimal 的 // 是精确整数除法，等价于
+    # floor(时长秒数 × 每小时价格 ÷ 3600)，不会经过浮点，也不会被
+    # 循环小数的中间近似值影响。
+    with localcontext() as context:
+        context.prec = MONEY_CALCULATION_PRECISION
+        table_fee = _quantize_money(
+            (duration * unit_price) // SECONDS_PER_HOUR
+        )
 
     # 金额直接写回这一条台位消费记录
     table_consumption["金额"] = table_fee
@@ -1000,39 +1112,214 @@ def two_calculate_table_fee(flow_box: dict) -> dict:
         "message": f"台位费计算成功，金额为 {table_fee}"
     }
 
-def two_backup_consumption_to_core_blackbox(cursor, table_id, consumption_record) -> dict:
-    # 把一条消费记录的最小核心数据备份到 MySQL 的核心备份表。
-    # consumption_record 已经由前面的取数据 / 创建数据流程检查完成。
-    # 这里只负责：
-    # 1. 根据消费记录编号判断消费类型。
-    # 2. 台位费调用 io 层写函数写入，写入由外层事务统一提交或回滚。
+def two_prepare_core_backup(table_id: str, consumption_record: dict) -> dict:
+    # 把一条消费记录整理成 core_backup 表需要的字段。
     #
-    # T = 台位费
-    # S = 商品（core_backup 表结构暂只覆盖台位费，商品备份保留占位）
+    # 本函数只做校验和内存组装：
+    # 1. 根据消费记录编号判断消费类型。
+    # 2. 台位费返回 core_backup 需要的字段。
+    # 3. 商品返回 core_backup_products 需要的字段。
+    # 4. 不接收 cursor，不访问数据库，也不关心事务如何提交。
+    #
+    # T = 台位费 → core_backup
+    # S = 商品   → core_backup_products
+    #
+    # 台位费成功时 data 结构：
+    # {
+    #     "备份类型": "台位费",
+    #     "消费记录编号": "T_1_1757688000",
+    #     "桌子号码": "1",
+    #     "开台时间": 1757688000,
+    #     "关台时间": 1757691600
+    # }
+    #
+    # 商品成功时 data 结构：
+    # {
+    #     "备份类型": "商品",
+    #     "消费记录编号": "S_1_1757688000",
+    #     "桌子号码": "1",
+    #     "商品编号": "P_001",
+    #     "商品名称": "可乐",
+    #     "单价": Decimal("3.00"),
+    #     "数量": 2,
+    #     "金额": Decimal("6.00"),
+    #     "创建时间": 1757688000
+    # }
+
+    if not isinstance(table_id, str) or not table_id.strip():
+        return {
+            "status": "error",
+            "error_type": "TableIdFormatError",
+            "data": None,
+            "message": "桌号格式错误，应该是非空字符串"
+        }
+
+    if not isinstance(consumption_record, dict):
+        return {
+            "status": "error",
+            "error_type": "ConsumptionRecordFormatError",
+            "data": None,
+            "message": "消费记录格式错误，应该是字典"
+        }
+
+    if "消费记录编号" not in consumption_record:
+        return {
+            "status": "error",
+            "error_type": "ConsumptionIdMissing",
+            "data": None,
+            "message": "消费记录缺少消费记录编号"
+        }
 
     consumption_id = consumption_record["消费记录编号"]
+
+    if not isinstance(consumption_id, str) or not consumption_id.strip():
+        return {
+            "status": "error",
+            "error_type": "ConsumptionIdFormatError",
+            "data": None,
+            "message": "消费记录编号格式错误，应该是非空字符串"
+        }
 
     # 台位费
     if consumption_id.startswith("T_"):
 
-        return one_insert_core_backup_to_mysql(
-            cursor,
-            consumption_id,
-            table_id,
-            consumption_record["开台时间"],
-            consumption_record["关台时间"]
-        )
+        for time_field in ("开台时间", "关台时间"):
+            if time_field not in consumption_record:
+                return {
+                    "status": "error",
+                    "error_type": "CoreBackupTimeMissing",
+                    "data": None,
+                    "message": f"核心备份缺少{time_field}：{consumption_id}"
+                }
+
+            if type(consumption_record[time_field]) not in (int, float):
+                return {
+                    "status": "error",
+                    "error_type": "CoreBackupTimeFormatError",
+                    "data": None,
+                    "message": f"核心备份的{time_field}格式错误：{consumption_id}"
+                }
+
+        start_time = consumption_record["开台时间"]
+        close_time = consumption_record["关台时间"]
+
+        if start_time > close_time:
+            return {
+                "status": "error",
+                "error_type": "CoreBackupTimeRangeInvalid",
+                "data": None,
+                "message": f"核心备份的开台时间大于关台时间：{consumption_id}"
+            }
+
+        return {
+            "status": "success",
+            "error_type": None,
+            "data": {
+                "备份类型": "台位费",
+                "消费记录编号": consumption_id,
+                "桌子号码": table_id,
+                "开台时间": start_time,
+                "关台时间": close_time
+            },
+            "message": f"台位费核心备份数据准备成功：{consumption_id}"
+        }
 
     # 商品
     elif consumption_id.startswith("S_"):
 
-        # 商品备份暂时不支持（core_backup 表结构只有台位费字段）。
-        # 这一段是保留占位，商品流程以后再处理。
+        required_fields = ("商品编号", "商品名称", "单价", "数量", "金额", "创建时间")
+
+        for field in required_fields:
+            if field not in consumption_record:
+                return {
+                    "status": "error",
+                    "error_type": "ProductBackupFieldMissing",
+                    "data": None,
+                    "message": f"商品核心备份缺少{field}：{consumption_id}"
+                }
+
+        product_id = consumption_record["商品编号"]
+        product_name = consumption_record["商品名称"]
+        unit_price = _as_decimal_amount(consumption_record["单价"])
+        quantity = consumption_record["数量"]
+        amount = _as_decimal_amount(consumption_record["金额"])
+        created_at = consumption_record["创建时间"]
+
+        if not isinstance(product_id, str) or not product_id.strip():
+            return {
+                "status": "error",
+                "error_type": "ProductBackupProductIdFormatError",
+                "data": None,
+                "message": f"商品核心备份的商品编号格式错误：{consumption_id}"
+            }
+
+        if not isinstance(product_name, str) or not product_name.strip():
+            return {
+                "status": "error",
+                "error_type": "ProductBackupProductNameFormatError",
+                "data": None,
+                "message": f"商品核心备份的商品名称格式错误：{consumption_id}"
+            }
+
+        if unit_price is None or unit_price < 0:
+            return {
+                "status": "error",
+                "error_type": "ProductBackupUnitPriceFormatError",
+                "data": None,
+                "message": f"商品核心备份的单价格式错误：{consumption_id}"
+            }
+
+        if type(quantity) is not int or quantity <= 0:
+            return {
+                "status": "error",
+                "error_type": "ProductBackupQuantityFormatError",
+                "data": None,
+                "message": f"商品核心备份的数量格式错误：{consumption_id}"
+            }
+
+        if amount is None or amount < 0:
+            return {
+                "status": "error",
+                "error_type": "ProductBackupAmountFormatError",
+                "data": None,
+                "message": f"商品核心备份的金额格式错误：{consumption_id}"
+            }
+
+        if type(created_at) is not int or created_at <= 0:
+            return {
+                "status": "error",
+                "error_type": "ProductBackupCreatedAtFormatError",
+                "data": None,
+                "message": f"商品核心备份的创建时间格式错误：{consumption_id}"
+            }
+
+        expected_amount = _quantize_money(unit_price * Decimal(quantity))
+        if _quantize_money(amount) != expected_amount:
+            return {
+                "status": "error",
+                "error_type": "ProductBackupAmountMismatch",
+                "data": None,
+                "message": (
+                    f"商品核心备份金额不一致：{consumption_id}，"
+                    f"单价×数量={expected_amount}，备份金额={amount}"
+                )
+            }
+
         return {
-            "status": "error",
-            "error_type": "ProductBackupNotSupported",
-            "data": None,
-            "message": "商品备份暂未支持（core_backup 表结构只覆盖台位费）"
+            "status": "success",
+            "error_type": None,
+            "data": {
+                "备份类型": "商品",
+                "消费记录编号": consumption_id,
+                "桌子号码": table_id,
+                "商品编号": product_id,
+                "商品名称": product_name,
+                "单价": unit_price,
+                "数量": quantity,
+                "金额": amount,
+                "创建时间": created_at
+            },
+            "message": f"商品核心备份数据准备成功：{consumption_id}"
         }
 
     # 其他前缀
@@ -1242,11 +1529,11 @@ def two_check_selected_consumptions(table_consumption_box: dict, selected_data: 
                 )
             }
 
-        amount = found_consumption["金额"]
+        raw_amount = found_consumption["金额"]
 
         # None 表示金额尚未确定。
         # 金额 0 是有效金额，不能用 if not amount 判断。
-        if amount is None:
+        if raw_amount is None:
             return {
                 "status": "error",
                 "error_type": "SelectedConsumptionAmountNotReady",
@@ -1257,9 +1544,9 @@ def two_check_selected_consumptions(table_consumption_box: dict, selected_data: 
                 )
             }
 
-        # 下一步需要累加金额，因此金额必须是整数或小数。
-        # 这里也排除字符串、True 和 False。
-        if type(amount) not in (int, float):
+        amount = _as_decimal_amount(raw_amount)
+
+        if amount is None:
             return {
                 "status": "error",
                 "error_type": "SelectedConsumptionAmountFormatError",
@@ -1273,9 +1560,9 @@ def two_check_selected_consumptions(table_consumption_box: dict, selected_data: 
         # 当前记录检查通过。
         # 复制一份放入已选消费列表，使已选消费
         # 与原待结算消费中的记录相互独立。
-        selected_consumptions.append(
-            copy.deepcopy(found_consumption)
-        )
+        prepared_consumption = copy.deepcopy(found_consumption)
+        prepared_consumption["金额"] = amount
+        selected_consumptions.append(prepared_consumption)
 
     # ==================== 第五步：返回检查通过的已选消费列表 ====================
 
@@ -1433,7 +1720,7 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
             }
 
         consumption_details = unpaid_bill.get("消费明细")
-        total_amount = unpaid_bill.get("总金额")
+        total_amount = _as_decimal_amount(unpaid_bill.get("总金额"))
 
         if not isinstance(consumption_details, list):
             return {
@@ -1443,7 +1730,7 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
                 "message": f"未支付订单 {order_id} 的消费明细格式错误"
             }
 
-        if type(total_amount) not in (int, float):
+        if total_amount is None:
             return {
                 "status": "error",
                 "error_type": "UnpaidOrderTotalAmountFormatError",
@@ -1465,7 +1752,7 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
                 }
 
             consumption_type = consumption.get("类型")
-            amount = consumption.get("金额")
+            amount = _as_decimal_amount(consumption.get("金额"))
 
             if not isinstance(consumption_type, str) or not consumption_type:
                 return {
@@ -1475,7 +1762,7 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
                     "message": f"未支付订单 {order_id} 的消费类型格式错误"
                 }
 
-            if type(amount) not in (int, float):
+            if amount is None:
                 return {
                     "status": "error",
                     "error_type": "ConsumptionAmountFormatError",
@@ -1492,12 +1779,14 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
             if consumption_type == "台位费":
                 start_time = consumption.get("开台时间")
                 close_time = consumption.get("关台时间")
-                hour_price = consumption.get("每小时价格")
+                hour_price = _as_decimal_amount(
+                    consumption.get("每小时价格")
+                )
 
                 if (
                     type(start_time) not in (int, float)
                     or type(close_time) not in (int, float)
-                    or type(hour_price) not in (int, float)
+                    or hour_price is None
                 ):
                     return {
                         "status": "error",
@@ -1515,13 +1804,15 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
 
             elif consumption_type == "商品":
                 product_name = consumption.get("商品名称")
-                unit_price = consumption.get("单价")
+                unit_price = _as_decimal_amount(
+                    consumption.get("单价")
+                )
                 quantity = consumption.get("数量")
 
                 if (
                     not isinstance(product_name, str)
                     or not product_name
-                    or type(unit_price) not in (int, float)
+                    or unit_price is None
                     or type(quantity) is not int
                     or quantity <= 0
                 ):
@@ -1564,35 +1855,124 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
     }
 
 
-def two_create_unpaid_bill(table_id: str, selected_consumptions: list) -> dict:
+def two_create_unpaid_bill(
+    table_id: str,
+    selected_consumptions: list,
+    current_time: int
+) -> dict:
     # 准备创建未支付订单需要落库的数据。
     #
     # 前一步已经完成：
     # 1. 找到客人本次选择的真实消费记录
     # 2. 确认每条消费都已经有确定金额
     #
+    # current_time 由控制层取好后传入；
+    # 本函数不获取系统当前时间，只使用入参。
+    #
     # 本函数负责：
-    # 1. 计算本次结账总金额
-    # 2. 取一次当前时间戳
-    # 3. 生成订单编号（桌号_当前时间戳）
+    # 1. 检查入参和消费金额
+    # 2. 计算本次结账总金额
+    # 3. 用传入的时间生成订单编号（桌号_当前时间戳）
     # 4. 返回要落库的订单数据
     #
     # 本函数不负责：
-    # 1. 不读取文件
-    # 2. 不写入文件
+    # 1. 不读取数据库或文件
+    # 2. 不写入数据库或文件
     # 3. 不清扫待结算消费
-    # 4. 不再组装 JSON 时代的“未支付订单对象”
+    # 4. 不获取系统当前时间
+
+    if not isinstance(table_id, str) or not table_id.strip():
+        return {
+            "status": "error",
+            "error_type": "TableIdFormatError",
+            "data": None,
+            "message": "桌号格式错误，应该是非空字符串"
+        }
+
+    if not isinstance(selected_consumptions, list) or not selected_consumptions:
+        return {
+            "status": "error",
+            "error_type": "SelectedConsumptionsFormatError",
+            "data": None,
+            "message": "已选消费应该是非空列表"
+        }
+
+    # 时间戳必须是正整数，且不能是 True/False。
+    if type(current_time) is not int or current_time <= 0:
+        return {
+            "status": "error",
+            "error_type": "OrderCreateTimeFormatError",
+            "data": None,
+            "message": "订单创建时间格式错误，应该是正整数时间戳"
+        }
 
     # 计算本次订单总金额。
     # 例如：台位费 30 元 + 可乐 6 元 = 36 元。
-    total_amount = sum(
-        consumption["金额"]
-        for consumption in selected_consumptions
-    )
+    total_amount = Decimal("0.00")
+    prepared_consumptions = []
 
-    # 调用底层统一时间函数，获取当前秒级时间戳。
-    # 时间戳只取一次，订单编号和“创建时间”共用同一个值。
-    current_time = one_get_current_time()
+    for consumption in selected_consumptions:
+        if not isinstance(consumption, dict):
+            return {
+                "status": "error",
+                "error_type": "SelectedConsumptionFormatError",
+                "data": None,
+                "message": "已选消费中存在格式错误的记录，应该是字典"
+            }
+
+        if "金额" not in consumption:
+            return {
+                "status": "error",
+                "error_type": "SelectedConsumptionAmountMissing",
+                "data": None,
+                "message": "已选消费中存在缺少金额的记录"
+            }
+
+        amount = _as_decimal_amount(consumption["金额"])
+
+        if amount is None:
+            return {
+                "status": "error",
+                "error_type": "SelectedConsumptionAmountFormatError",
+                "data": None,
+                "message": "已选消费中存在金额格式错误的记录"
+            }
+
+        prepared_consumption = copy.deepcopy(consumption)
+        prepared_consumption["金额"] = amount
+
+        # 订单明细里的价格快照也必须是 Decimal，避免后续落库时又从
+        # 旧的 float 数据带进来。
+        if prepared_consumption.get("类型") == "台位费":
+            hour_price = _as_decimal_amount(
+                prepared_consumption.get("每小时价格")
+            )
+            if hour_price is None:
+                return {
+                    "status": "error",
+                    "error_type": "SelectedConsumptionHourPriceFormatError",
+                    "data": None,
+                    "message": "已选台位费中存在每小时价格格式错误的记录"
+                }
+            prepared_consumption["每小时价格"] = hour_price
+
+        elif prepared_consumption.get("类型") == "商品":
+            unit_price = _as_decimal_amount(
+                prepared_consumption.get("单价")
+            )
+            if unit_price is None:
+                return {
+                    "status": "error",
+                    "error_type": "SelectedConsumptionUnitPriceFormatError",
+                    "data": None,
+                    "message": "已选商品消费中存在单价格式错误的记录"
+                }
+            prepared_consumption["单价"] = unit_price
+
+        prepared_consumptions.append(prepared_consumption)
+        total_amount += amount
+
+    total_amount = _quantize_money(total_amount)
 
     # 桌号 + 创建订单时间，组成订单编号。
     # 例如：1_1757688000
@@ -1605,7 +1985,7 @@ def two_create_unpaid_bill(table_id: str, selected_consumptions: list) -> dict:
         "订单编号": order_id,
         "总金额": total_amount,
         "创建时间": current_time,
-        "已选消费": selected_consumptions
+        "已选消费": prepared_consumptions
     }
 
     return {
@@ -1763,11 +2143,11 @@ def two_check_products(products: dict) -> dict:
                 "message": f"{product_id} 商品缺少 单价 字段"
             }
 
-        unit_price = product_info["单价"]
+        unit_price = _as_decimal_amount(product_info["单价"])
 
-        # 单价必须是数字。
-        # 这里用 type() 判断，None、字符串、True 和 False 都会被排除。
-        if type(unit_price) not in (int, float):
+        # 单价必须是 Decimal 可表示的有限数字。
+        # int 只作为兼容输入，业务计算前统一转成 Decimal。
+        if unit_price is None:
             return {
                 "status": "error",
                 "error_type": "ProductUnitPriceFormatError",
@@ -1828,16 +2208,26 @@ def two_check_products(products: dict) -> dict:
 def two_get_frontend_products_info(products: dict) -> dict:
     # 整理前端展示商品需要的字段。
     #
-    # 调用前，products 已由 io 层从 MySQL 取回，并由 two_check_products() 检查。
+    # 调用前，products 已由控制层从 MySQL 取回，并由 two_check_products() 检查。
     # 本函数只提取和整理字段，不读取文件、不修改库存，也不处理商品消费。
 
     frontend_products = {}
 
     for product_id, product_info in products.items():
+        unit_price = _as_decimal_amount(product_info["单价"])
+
+        if unit_price is None:
+            return {
+                "status": "error",
+                "error_type": "ProductUnitPriceFormatError",
+                "data": None,
+                "message": f"{product_id} 商品的 单价 格式错误"
+            }
+
         frontend_products[product_id] = {
             "product_id": product_id,
             "product_name": product_info["商品名称"],
-            "price": product_info["单价"],
+            "price": unit_price,
             "stock": product_info["库存"]
         }
 
@@ -1853,10 +2243,10 @@ def two_get_product_info(product_info: dict, product_id: str) -> dict:
     # 获取某一个商品的信息
     #
     # 这个函数负责：
-    # 1. 接收 io 层已经取出的单个商品资料 product_info
+    # 1. 接收控制层已经取出的单个商品资料 product_info
     # 2. 检查这份商品资料是否具备后续业务需要的字段
     #
-    # 前一步 io 层函数 one_load_product_by_id_from_mysql() 已经完成：
+    # 前一步控制层已经通过 IO 层完成：
     # 商品资料已经按商品编号单独取出，
     # 本函数不再从商品总表大字典里切数据。
     #
@@ -2004,11 +2394,29 @@ def two_create_product_consumption(table_id: str, flow_box: dict, current_time: 
 
     # 从真实商品资料中取出商品名称和单价。
     product_name = product_info["商品名称"]
-    product_price = product_info["单价"]
+    product_price = _as_decimal_amount(product_info["单价"])
+
+    if product_price is None:
+        return {
+            "status": "error",
+            "error_type": "ProductUnitPriceFormatError",
+            "data": None,
+            "message": f"{product_id} 商品的 单价 格式错误"
+        }
+
+    if type(product_count) is not int or product_count <= 0:
+        return {
+            "status": "error",
+            "error_type": "ProductCountFormatError",
+            "data": None,
+            "message": "商品数量格式错误，应该是大于 0 的整数"
+        }
 
     # 商品消费金额 = 商品单价 × 购买数量。
     # 例如：3 元 × 2 瓶 = 6 元。
-    total_amount = product_price * product_count
+    total_amount = _quantize_money(
+        product_price * Decimal(product_count)
+    )
 
     # S 代表商品消费。
     # 桌子号码 + 创建商品消费的时间，组成消费记录编号。
@@ -2027,7 +2435,8 @@ def two_create_product_consumption(table_id: str, flow_box: dict, current_time: 
         "商品名称": product_name,
         "单价": product_price,
         "数量": product_count,
-        "金额": total_amount
+        "金额": total_amount,
+        "创建时间": current_time
     }
 
     return {

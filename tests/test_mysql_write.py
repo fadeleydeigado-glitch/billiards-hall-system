@@ -2,7 +2,7 @@
 """
 test_mysql_write.py
 
-作用：10 个 MySQL 写函数的冒烟测试。
+作用：9 个主库写函数 + 2 个备份库写函数的冒烟测试。
       全程手动开事务，逐步写入并即时 SELECT 校验，跑完统一 ROLLBACK，
       最后再查一次数据库，确认事务回滚后数据没有任何残留。
       本脚本不会向数据库留下任何数据。
@@ -32,6 +32,7 @@ TABLE_ID = "99"
 
 T_ID = "T_99_test"                     # 待结算台位费消费编号
 S_ID = "S_99_test"                     # 待结算商品消费编号
+S_BACKUP_ID = "S_99_test_backup"       # 商品核心备份消费编号
 START_TIME = 1700000000
 CLOSE_TIME = 1700003600
 HOUR_PRICE = 30
@@ -61,7 +62,11 @@ COUNT_TABLES = [
     "order_consumptions",
     "order_table_fees",
     "order_product_consumptions",
+]
+
+BACKUP_TABLES = [
     "core_backup",
+    "core_backup_products",
 ]
 
 RESULTS = []
@@ -69,6 +74,10 @@ RESULTS = []
 
 def open_connection():
     return pymysql.connect(**io_layer.DB_CONFIG)
+
+
+def open_backup_connection():
+    return pymysql.connect(**io_layer.BACKUP_DB_CONFIG)
 
 
 def snapshot(conn):
@@ -81,6 +90,17 @@ def snapshot(conn):
     cur.execute("SELECT `库存` FROM products WHERE id = %s", (PRODUCT_ID,))
     row = cur.fetchone()
     data["products_stock"] = row[0] if row else None
+    cur.close()
+    return data
+
+
+def backup_snapshot(conn):
+    """抓一份备份库两张表的行数快照。"""
+    cur = conn.cursor()
+    data = {}
+    for table in BACKUP_TABLES:
+        cur.execute("SELECT COUNT(*) FROM " + table)
+        data[table] = cur.fetchone()[0]
     cur.close()
     return data
 
@@ -112,13 +132,26 @@ def main():
     baseline = snapshot(base_conn)
     base_conn.close()
 
+    backup_base_conn = open_backup_connection()
+    backup_baseline = backup_snapshot(backup_base_conn)
+    backup_base_conn.close()
+
     conn = open_connection()
     conn.begin()
     cur = conn.cursor()
 
-    print("开始执行：10 个 MySQL 写函数冒烟测试（全程同一事务，最后回滚）")
-    print("数据库: %s   测试桌号: %s   测试商品: %s"
-          % (io_layer.DB_CONFIG["database"], TABLE_ID, PRODUCT_ID))
+    backup_conn = open_backup_connection()
+    backup_conn.begin()
+    backup_cur = backup_conn.cursor()
+
+    print("开始执行：9 个主库写函数 + 2 个备份库写函数冒烟测试（最后统一回滚）")
+    print("主库: %s   备份库: %s   测试桌号: %s   测试商品: %s"
+          % (
+              io_layer.DB_CONFIG["database"],
+              io_layer.BACKUP_DB_CONFIG["database"],
+              TABLE_ID,
+              PRODUCT_ID,
+          ))
 
     try:
         # ---------- 1. 插入待结算台位费 ----------
@@ -254,13 +287,50 @@ def main():
         ])
 
         # ---------- 10. 插入核心备份 ----------
-        before_cb = count(cur, "SELECT COUNT(*) FROM core_backup")
+        before_cb = count(backup_cur, "SELECT COUNT(*) FROM core_backup")
         r = io_layer.one_insert_core_backup_to_mysql(
-            cur, T_ID, TABLE_ID, START_TIME, CLOSE_TIME)
-        after_cb = count(cur, "SELECT COUNT(*) FROM core_backup")
+            backup_cur, T_ID, TABLE_ID, START_TIME, CLOSE_TIME)
+        after_cb = count(backup_cur, "SELECT COUNT(*) FROM core_backup")
         report("[10] one_insert_core_backup_to_mysql", r["status"], [
             ("core_backup 行数 %d -> %d（期望 +1）" % (before_cb, after_cb),
              after_cb == before_cb + 1),
+        ])
+
+        # ---------- 11. 插入商品核心备份 ----------
+        before_cbp = count(backup_cur, "SELECT COUNT(*) FROM core_backup_products")
+        r = io_layer.one_insert_core_backup_product_to_mysql(
+            backup_cur,
+            S_BACKUP_ID,
+            TABLE_ID,
+            PRODUCT_ID,
+            PRODUCT_NAME,
+            UNIT_PRICE,
+            QUANTITY,
+            PRODUCT_AMOUNT,
+            ORDER_CREATED
+        )
+        after_cbp = count(backup_cur, "SELECT COUNT(*) FROM core_backup_products")
+        backup_cur.execute(
+            "SELECT `商品编号`, `数量`, `金额`, `创建时间` "
+            "FROM core_backup_products WHERE consumption_id = %s",
+            (S_BACKUP_ID,)
+        )
+        row = backup_cur.fetchone()
+        got_pid, got_qty, got_amount, got_created = (
+            row if row else (None, None, None, None)
+        )
+        report("[11] one_insert_core_backup_product_to_mysql", r["status"], [
+            ("core_backup_products 行数 %d -> %d（期望 +1）"
+             % (before_cbp, after_cbp),
+             after_cbp == before_cbp + 1),
+            ("商品编号 期望 %s 实际 %s" % (PRODUCT_ID, got_pid),
+             got_pid == PRODUCT_ID),
+            ("数量 期望 %s 实际 %s" % (QUANTITY, got_qty),
+             got_qty == QUANTITY),
+            ("金额 期望 %s 实际 %s" % (PRODUCT_AMOUNT, got_amount),
+             got_amount == PRODUCT_AMOUNT),
+            ("创建时间 期望 %s 实际 %s" % (ORDER_CREATED, got_created),
+             got_created == ORDER_CREATED),
         ])
 
     finally:
@@ -269,13 +339,25 @@ def main():
         cur.close()
         conn.close()
 
-    # 回滚后，用一条全新连接再查一次数据库
+        backup_conn.rollback()
+        backup_cur.close()
+        backup_conn.close()
+
+    # 回滚后，用全新连接再查一次两个库
     verify_conn = open_connection()
     after_rollback = snapshot(verify_conn)
     verify_conn.close()
 
+    verify_backup_conn = open_backup_connection()
+    after_backup_rollback = backup_snapshot(verify_backup_conn)
+    verify_backup_conn.close()
+
     changed = [k for k in baseline if baseline[k] != after_rollback.get(k)]
-    rollback_ok = (not changed)
+    backup_changed = [
+        k for k in backup_baseline
+        if backup_baseline[k] != after_backup_rollback.get(k)
+    ]
+    rollback_ok = (not changed and not backup_changed)
 
     # ---------- 总结论 ----------
     total = len(RESULTS)
@@ -291,8 +373,11 @@ def main():
     print("回滚后数据库状态未改变：%s" % ("是" if rollback_ok else "否"))
     if not rollback_ok:
         for key in changed:
-            print("    变化项：%s 基线=%s 回滚后=%s"
+            print("    主库变化项：%s 基线=%s 回滚后=%s"
                   % (key, baseline[key], after_rollback.get(key)))
+        for key in backup_changed:
+            print("    备份库变化项：%s 基线=%s 回滚后=%s"
+                  % (key, backup_baseline[key], after_backup_rollback.get(key)))
 
 
 if __name__ == "__main__":

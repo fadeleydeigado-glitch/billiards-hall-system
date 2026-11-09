@@ -27,12 +27,33 @@ DB_CONFIG = {
     "charset": "utf8mb4"
 }
 
+# 备份库连接参数。
+# 默认与主库同机同账号，只切换数据库名；
+# 如果以后把备份库放到独立主机或独立磁盘，只需修改 MYSQL_BACKUP_* 环境变量。
+BACKUP_DB_CONFIG = {
+    "host": os.environ.get("MYSQL_BACKUP_HOST", os.environ.get("MYSQL_HOST", "localhost")),
+    "user": os.environ.get("MYSQL_BACKUP_USER", os.environ.get("MYSQL_USER", "root")),
+    "password": os.environ.get("MYSQL_BACKUP_PASSWORD", os.environ.get("MYSQL_PASSWORD", "")),
+    "database": os.environ.get("MYSQL_BACKUP_DATABASE", "billiards_backup"),
+    "charset": "utf8mb4"
+}
+
 def one_get_mysql_connection():
     # 作用：内部连接助手，按照 DB_CONFIG 建立并返回一个 pymysql 连接。
     # 接收：无。
     # 说明：仅供新增的 MySQL 函数内部使用，连接用完必须由调用方关闭。
     # 连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
     return pymysql.connect(**DB_CONFIG)
+
+
+def one_get_backup_mysql_connection():
+    # 作用：建立并返回一条到独立备份库的连接。
+    # 接收：无。
+    # 说明：
+    # - 绝不能把主库 connection / cursor 传给备份写入函数；
+    # - 备份库连接必须由本助手新建，用完由调用方关闭；
+    # - 备份库连接失败时抛异常，由 worker 捕获并让事件进入重试。
+    return pymysql.connect(**BACKUP_DB_CONFIG)
 
 
 def one_convert_mysql_error(error: Exception, action: str) -> dict:
@@ -52,14 +73,12 @@ def one_convert_mysql_error(error: Exception, action: str) -> dict:
 def one_convert_mysql_value(value):
     # 作用：内部类型转换助手，把 MySQL 读出来的值转换成业务层使用的 Python 类型。
     # 接收：从数据库读出来的单个值。
-    # 返回：DECIMAL 转成 int（没有小数）或 float（有小数）；BIGINT 等整数保持 int；None 保持 None。
-    # 说明：business 层里写着"金额必须是 int 或 float"的检查，不转换会大面积误判。
+    # 返回：DECIMAL 保持 Decimal；BIGINT / INT 等整数保持 int；None 保持 None。
+    # 说明：金额从读库开始就必须是 Decimal，不能先经过 float 再进入业务计算。
     if value is None:
         return None
     if isinstance(value, Decimal):
-        if value == int(value):
-            return int(value)
-        return float(value)
+        return value
     return value
 
 
@@ -919,11 +938,13 @@ def one_insert_core_backup_to_mysql(cursor, consumption_id, table_id, start_time
     # 作用：新增一条核心备份（关台后备份台位费核心数据）。
     # 接收：cursor、消费记录编号、桌号、开台时间、关台时间。
     # 返回：四键结果字典；data 为关键编号（消费记录编号）。
-    # 写入：core_backup 表插 1 行；没有商品分支，旧函数里的商品备份分支是遗留代码，本次不实现。
+    # 写入：core_backup 表插 1 行；按 consumption_id 幂等，重复处理不会报主键冲突。
+    # 说明：cursor 必须来自备份库连接，不能传入主库 cursor。
     try:
         cursor.execute(
             "INSERT INTO core_backup (consumption_id, `桌台编号`, `开台时间`, `关台时间`) "
-            "VALUES (%s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE consumption_id = consumption_id",
             (consumption_id, table_id, start_time, close_time)
         )
 
@@ -935,6 +956,52 @@ def one_insert_core_backup_to_mysql(cursor, consumption_id, table_id, start_time
         }
     except Exception as error:
         return one_convert_mysql_error(error, "新增核心备份")
+
+
+def one_insert_core_backup_product_to_mysql(
+    cursor,
+    consumption_id,
+    table_id,
+    product_id,
+    product_name,
+    unit_price,
+    quantity,
+    amount,
+    created_at
+) -> dict:
+    # 作用：新增一条商品消费核心备份（加商品成功后备份商品消费核心数据）。
+    # 接收：cursor、消费记录编号、桌号、商品编号、商品名称、单价、数量、金额、创建时间。
+    # 返回：四键结果字典；data 为关键编号（消费记录编号）。
+    # 写入：core_backup_products 表插 1 行；同一个消费记录编号重复写入时保持幂等。
+    # 说明：
+    # - 当前 core_backup_products 与主业务表在同一个 MySQL 库；
+    # - 后续迁移到独立备份库时，cursor 必须来自备份库连接，不能复用主库连接。
+    try:
+        cursor.execute(
+            "INSERT INTO core_backup_products "
+            "(consumption_id, `桌台编号`, `商品编号`, `商品名称`, `单价`, `数量`, `金额`, `创建时间`) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE consumption_id = consumption_id",
+            (
+                consumption_id,
+                table_id,
+                product_id,
+                product_name,
+                unit_price,
+                quantity,
+                amount,
+                created_at
+            )
+        )
+
+        return {
+            "status": "success",
+            "error_type": None,
+            "data": consumption_id,
+            "message": f"商品核心备份 {consumption_id} 写入成功"
+        }
+    except Exception as error:
+        return one_convert_mysql_error(error, "新增商品核心备份")
 
 
 def one_execute_in_transaction(operation_function) -> dict:

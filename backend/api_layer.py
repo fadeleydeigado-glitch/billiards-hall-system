@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .controller_layer import (
@@ -15,6 +15,7 @@ from .controller_layer import (
     three_confirm_payment,
     three_add_product_consumption,
 )
+from .json_utils import decimal_to_json
 
 
 app = FastAPI()
@@ -46,52 +47,58 @@ if FRONTEND_DIR.exists():
     )
 
 
+def _json_response(result: dict) -> JSONResponse:
+    # 金额在业务层统一是 Decimal；HTTP 边界显式转成字符串，
+    # 避免 json.dumps 直接序列化 Decimal 时报错或偷偷变成 float。
+    return JSONResponse(content=decimal_to_json(result))
+
+
 @app.get("/frontend/refresh")
 def api_get_frontend_refresh_data():
     # 对应第三层函数 three_get_frontend_refresh_data。
-    return three_get_frontend_refresh_data()
+    return _json_response(three_get_frontend_refresh_data())
 
 
 @app.get("/frontend/products")
 def api_get_frontend_products_data():
     # 对应第三层函数 three_get_frontend_products_data。
-    return three_get_frontend_products_data()
+    return _json_response(three_get_frontend_products_data())
 
 
 @app.get("/frontend/unpaid-orders")
 def api_get_frontend_unpaid_orders_data():
     # 对应第三层函数 three_get_frontend_unpaid_orders_data。
-    return three_get_frontend_unpaid_orders_data()
+    return _json_response(three_get_frontend_unpaid_orders_data())
 
 
 @app.get("/tables/checkout-options")
 def api_get_frontend_checkout_options(table_id: str):
     # 对应第三层函数 three_get_frontend_checkout_options。
-    return three_get_frontend_checkout_options(table_id)
+    return _json_response(three_get_frontend_checkout_options(table_id))
 
 
 @app.post("/tables/open")
 def api_open_table(table_id: str):
     # 对应第三层函数 three_open_table。
-    return three_open_table(table_id)
+    return _json_response(three_open_table(table_id))
 
 
 @app.post("/tables/close")
 def api_close_table(table_id: str):
     # 对应第三层函数 three_close_table。
-    return three_close_table(table_id)
+    return _json_response(three_close_table(table_id))
 
 
 @app.post("/orders/unpaid")
 def api_create_unpaid_order(selected_data: dict):
     # 对应第三层函数 three_create_unpaid_order。
-    return three_create_unpaid_order(selected_data)
+    return _json_response(three_create_unpaid_order(selected_data))
 
 
 @app.post("/payments/confirm")
 def api_confirm_payment(payment_data: dict):
     # 对应第三层函数 three_confirm_payment。
-    return three_confirm_payment(payment_data)
+    return _json_response(three_confirm_payment(payment_data))
 
 
 @app.post("/products/consumption")
@@ -101,4 +108,6 @@ def api_add_product_consumption(
     product_count: int,
 ):
     # 对应第三层函数 three_add_product_consumption。
-    return three_add_product_consumption(table_id, product_id, product_count)
+    return _json_response(
+        three_add_product_consumption(table_id, product_id, product_count)
+    )

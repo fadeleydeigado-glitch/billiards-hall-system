@@ -35,6 +35,7 @@ test_full_flow.py
 
 import sys
 import os
+from decimal import Decimal
 
 # 保证无论从哪里启动，都能导入项目根目录下的模块。
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,11 +47,45 @@ try:
 except Exception:
     pass
 
+
+# ==================== 强制安全校验 ====================
+# 本脚本会真实写库，必须先获得显式授权。
+if os.environ.get("ALLOW_WRITE_TESTS") != "1":
+    print(
+        "错误：测试会真实写库，请先设置环境变量授权：ALLOW_WRITE_TESTS=1",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 import pymysql
 
 # 数据库连接参数统一从 backend.io_layer 读取，避免重复写用户名 / 密码。
-from backend.io_layer import DB_CONFIG
-from backend import io_layer, controller_layer
+from backend.io_layer import BACKUP_DB_CONFIG, DB_CONFIG
+
+
+# 再确认当前连接的是测试库，防止误伤正式数据。
+database_name = str(DB_CONFIG.get("database", ""))
+if "test" not in database_name.lower():
+    print(
+        "错误：拒绝执行写库测试，当前 MYSQL_DATABASE="
+        f"{database_name!r}，数据库名必须包含 'test'。",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+# 备份库也必须是测试库，防止测试把备份写进正式备份库。
+backup_database_name = str(BACKUP_DB_CONFIG.get("database", ""))
+if "test" not in backup_database_name.lower():
+    print(
+        "错误：拒绝执行写库测试，当前 MYSQL_BACKUP_DATABASE="
+        f"{backup_database_name!r}，数据库名必须包含 'test'。",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+from backend import controller_layer, io_layer, outbox
 from backend.controller_layer import (
     three_open_table,
     three_close_table,
@@ -137,6 +172,35 @@ def db_query_one(sql, params=None):
     return rows[0] if rows else None
 
 
+def backup_db_query(sql, params=None):
+    # 查询独立备份库，返回所有行。
+    connection = pymysql.connect(**BACKUP_DB_CONFIG)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params or ())
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+def backup_db_query_one(sql, params=None):
+    rows = backup_db_query(sql, params)
+    return rows[0] if rows else None
+
+
+def get_outbox_event(consumption_id, event_type):
+    # 按消费编号查最近一条 outbox 事件。
+    # payload 是 JSON，这里用 JSON_EXTRACT 取出 consumption_id 做匹配。
+    return db_query_one(
+        "SELECT event_id, status, retry_count, last_error "
+        "FROM outbox_events "
+        "WHERE event_type = %s "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.consumption_id')) = %s "
+        "ORDER BY event_id DESC LIMIT 1",
+        (event_type, consumption_id),
+    )
+
+
 # ============================================================
 print("=" * 72)
 print("test_full_flow.py —— 五个写流程完整测试")
@@ -192,7 +256,7 @@ if product_row is None:
     sys.exit(1)
 
 product_name = product_row[0]
-product_price = float(product_row[1])
+product_price = Decimal(product_row[1])
 
 
 # ============================================================
@@ -245,7 +309,8 @@ if fee_row is not None:
     conds.append(("新增台位费 金额为空", fee_row[4] is None, f"金额={fee_row[4]}"))
     conds.append(
         ("新增台位费 每小时价格与桌台配置一致",
-         table_price is not None and float(fee_row[3]) == float(table_price),
+         table_price is not None
+         and Decimal(fee_row[3]) == Decimal(table_price),
          f"明细={fee_row[3]}, 配置={table_price}")
     )
 conds.append(("ongoing_consumptions 新增记录且类型为 T",
@@ -288,7 +353,7 @@ if opc_row is not None:
     conds.append((f"明细 数量={ADD_COUNT}", opc_row[4] == ADD_COUNT, f"实际={opc_row[4]}"))
     conds.append(
         (f"明细 金额=单价×数量={product_price * ADD_COUNT:.2f}",
-         float(opc_row[5]) == product_price * ADD_COUNT, f"实际={opc_row[5]}")
+         Decimal(opc_row[5]) == product_price * ADD_COUNT, f"实际={opc_row[5]}")
     )
 conds.append(("ongoing_consumptions 新增记录且类型为 S",
               opc_main_row is not None and opc_main_row[1] == "S", f"主表行={opc_main_row}"))
@@ -299,9 +364,44 @@ stock_after_add = db_query_one(
 conds.append((f"库存 {stock_before} → {stock_before - ADD_COUNT}",
               stock_after_add == stock_before - ADD_COUNT, f"实际={stock_after_add}"))
 
+product_outbox_event = (
+    get_outbox_event(product_consumption_id, "core_backup_product")
+    if product_consumption_id else None
+)
+conds.append(("outbox 已生成商品备份事件",
+              product_outbox_event is not None,
+              f"事件={product_outbox_event}"))
+
+if product_outbox_event is not None:
+    outbox.run_once(max_events=100)
+    product_outbox_after = get_outbox_event(
+        product_consumption_id, "core_backup_product"
+    )
+    conds.append((
+        "商品备份事件已处理为 done",
+        product_outbox_after is not None and product_outbox_after[1] == "done",
+        f"事件={product_outbox_after}",
+    ))
+
+product_backup_row = backup_db_query_one(
+    "SELECT consumption_id, `桌台编号`, `商品编号`, `数量`, `金额` "
+    "FROM core_backup_products WHERE consumption_id = %s",
+    (product_consumption_id,),
+) if product_consumption_id else None
+conds.append(("billiards_backup.core_backup_products 已生成商品备份",
+              product_backup_row is not None, f"备份行={product_backup_row}"))
+if product_backup_row is not None:
+    conds.append(("商品备份数量正确",
+                  product_backup_row[3] == ADD_COUNT,
+                  f"实际={product_backup_row[3]}"))
+    conds.append(("商品备份金额正确",
+                  Decimal(product_backup_row[4]) == product_price * ADD_COUNT,
+                  f"实际={product_backup_row[4]}"))
+
 ok, detail = summarise(conds)
 add_check("1-2", f"给 1 号桌加 {ADD_COUNT} 个 {PRODUCT_ID}（{product_name}）："
-                 f"流程成功、消费写入、库存扣减 {ADD_COUNT}", ok, detail)
+                 f"流程成功、消费写入、库存扣减 {ADD_COUNT}、outbox 事件已入队并写入备份库",
+          ok, detail)
 
 
 # ---------- 1-3 关台 ----------
@@ -329,18 +429,34 @@ if fee_id:
         conds.append(("关台后 关台时间已写入", close_time is not None, f"关台时间={close_time}"))
         conds.append(("关台后 金额已写入", amount is not None, f"金额={amount}"))
         if close_time is not None and amount is not None:
-            expected_amount = int((close_time - start_time) / 3600 * float(hour_price))
+            expected_amount = int(
+                (Decimal(close_time - start_time) * Decimal(hour_price))
+                // Decimal(3600)
+            )
             conds.append(("金额与 (关台-开台)/3600×每小时价格 取整一致",
                           int(amount) == expected_amount,
                           f"实际={amount}, 计算={expected_amount}"))
         else:
             conds.append(("金额与时长公式一致", False, "关台时间或金额缺失"))
-    backup_row = db_query_one(
+    close_outbox_event = get_outbox_event(fee_id, "core_backup")
+    conds.append(("outbox 已生成关台备份事件",
+                  close_outbox_event is not None,
+                  f"事件={close_outbox_event}"))
+    if close_outbox_event is not None:
+        outbox.run_once(max_events=100)
+        close_outbox_after = get_outbox_event(fee_id, "core_backup")
+        conds.append((
+            "关台备份事件已处理为 done",
+            close_outbox_after is not None and close_outbox_after[1] == "done",
+            f"事件={close_outbox_after}",
+        ))
+    backup_row = backup_db_query_one(
         "SELECT consumption_id, `开台时间`, `关台时间` FROM core_backup "
         "WHERE consumption_id = %s",
         (fee_id,),
     )
-    conds.append(("core_backup 已生成该消费记录备份", backup_row is not None, f"备份行={backup_row}"))
+    conds.append(("billiards_backup.core_backup 已生成该消费记录备份",
+                  backup_row is not None, f"备份行={backup_row}"))
 else:
     conds.append(("关台目标确定", False, "开台步骤没有拿到消费记录编号"))
 
@@ -364,7 +480,13 @@ if not closed_fees or not product_consumption_id:
     order_id = None
 else:
     product_amount = product_price * ADD_COUNT
-    expected_total = sum(float(row[1]) for row in closed_fees) + product_amount
+    expected_total = (
+        sum(
+            (Decimal(row[1]) for row in closed_fees),
+            Decimal("0.00")
+        )
+        + product_amount
+    )
 
     order_result = three_create_unpaid_order({
         "桌子号码": TABLE_ID,
@@ -390,7 +512,7 @@ else:
         conds.append(("orders 新增订单主记录（未支付）",
                       order_row[0] == "未支付", f"支付状态={order_row[0]}"))
         conds.append((f"订单总金额={expected_total:.2f}",
-                      float(order_row[1]) == float(expected_total),
+                      Decimal(order_row[1]) == expected_total,
                       f"实际={order_row[1]}"))
 
     ok, detail = summarise(conds)
