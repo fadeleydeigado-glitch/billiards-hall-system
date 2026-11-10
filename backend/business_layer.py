@@ -6,9 +6,12 @@ from decimal import (
     localcontext,
 )
 
+from .id_utils import build_business_id, resolve_id_timestamp_ms
+
 
 # 本层只依赖 Python 标准库和入参。
-# 不导入 io_layer，不读写数据库/文件，也不获取系统当前时间。
+# 不导入 io_layer，不读写数据库/文件，也不获取系统当前时间；
+# 编号生成使用项目内的纯函数模块 id_utils，时间由控制层传入。
 
 
 # ==================== 金额计算公共设置 ====================
@@ -57,6 +60,27 @@ def _quantize_money(value: Decimal) -> Decimal:
             MONEY_QUANTUM,
             rounding=ROUND_HALF_UP
         )
+
+
+def _build_business_id_or_error(
+    prefix: str,
+    table_id: str,
+    current_time: int,
+    current_time_ms: int | None,
+    error_type: str,
+    subject: str
+) -> tuple[str | None, dict | None]:
+    # 三处编号生成共用同一套错误处理，避免每个流程重复写 try/except。
+    try:
+        timestamp_ms = resolve_id_timestamp_ms(current_time, current_time_ms)
+        return build_business_id(prefix, table_id, timestamp_ms), None
+    except ValueError as error:
+        return None, {
+            "status": "error",
+            "error_type": error_type,
+            "data": None,
+            "message": f"{subject}生成失败：{error}"
+        }
 
 
 # ==================== 开台流程 ====================
@@ -859,7 +883,12 @@ def two_get_empty_billiards_tables(table_consumption_boxes: dict) -> dict:
         "message": "空闲桌子列表获取成功"
     }
 
-def two_create_flow_box(table_id: str, current_time: int, table_info: dict) -> dict:
+def two_create_flow_box(
+    table_id: str,
+    current_time: int,
+    table_info: dict,
+    current_time_ms: int | None = None
+) -> dict:
     # 创建一条新的业务流程箱子
     # 一个流程箱子对应一次独立的台位消费流程
     # 后面的业务函数继续处理同一个 flow_box，不重新创建新的箱子
@@ -874,9 +903,18 @@ def two_create_flow_box(table_id: str, current_time: int, table_info: dict) -> d
             "message": f"{table_id} 号桌的 每小时价格 格式错误"
         }
 
-    # T = 台位费
-    # 桌号 + 开台时间共同组成这一次台位消费的记录编号
-    consumption_id = f"T_{table_id}_{current_time}"
+    # T = 台位费。
+    # 编号使用毫秒时间 + 随机后缀；开台时间字段仍保存秒级时间。
+    consumption_id, id_error = _build_business_id_or_error(
+        "T",
+        table_id,
+        current_time,
+        current_time_ms,
+        "TableFeeIdFormatError",
+        "台位消费编号"
+    )
+    if id_error is not None:
+        return id_error
 
     flow_box = {
         "桌子号码": table_id,
@@ -1127,7 +1165,7 @@ def two_prepare_core_backup(table_id: str, consumption_record: dict) -> dict:
     # 台位费成功时 data 结构：
     # {
     #     "备份类型": "台位费",
-    #     "消费记录编号": "T_1_1757688000",
+    #     "消费记录编号": "T_1_tmv7ggbkz_0y8ojs",
     #     "桌子号码": "1",
     #     "开台时间": 1757688000,
     #     "关台时间": 1757691600
@@ -1136,7 +1174,7 @@ def two_prepare_core_backup(table_id: str, consumption_record: dict) -> dict:
     # 商品成功时 data 结构：
     # {
     #     "备份类型": "商品",
-    #     "消费记录编号": "S_1_1757688000",
+    #     "消费记录编号": "S_1_tmv7ggbkz_lqrv6v",
     #     "桌子号码": "1",
     #     "商品编号": "P_001",
     #     "商品名称": "可乐",
@@ -1649,10 +1687,10 @@ def two_check_selected_consumptions_not_in_unpaid_orders(
 def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
     # 整理“确认收款”前端选择和核对所需的未支付订单。
     #
-    # 调用前，all_unpaid_orders 已由第三层从真实订单文件读取。
+    # 调用前，all_unpaid_orders 已由第三层从真实订单表读取。
     # 本函数只提取展示字段，不修改订单、不确认收款，也不保存文件。
-    # 订单编号内部使用“桌号_创建时间戳”规则，因此可从编号中取得
-    # 前端展示所需的桌号和创建时间；订单编号本身不需要展示给用户。
+    # 桌号和创建时间直接使用订单查询结果中的字段，不再从订单编号里解析。
+    # 订单编号只作为不透明的唯一标识使用，避免以后改编号格式时影响展示。
 
     if not isinstance(all_unpaid_orders, dict):
         return {
@@ -1675,20 +1713,6 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
                 "message": "未支付订单中存在格式错误的订单编号"
             }
 
-        table_id, separator, created_at_text = order_id.rpartition("_")
-
-        if (
-            not separator
-            or not table_id
-            or not created_at_text.isdigit()
-        ):
-            return {
-                "status": "error",
-                "error_type": "UnpaidOrderIdFormatError",
-                "data": None,
-                "message": f"未支付订单编号格式错误：{order_id}"
-            }
-
         if not isinstance(unpaid_bill, dict):
             return {
                 "status": "error",
@@ -1696,6 +1720,50 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
                 "data": None,
                 "message": f"未支付订单 {order_id} 格式错误"
             }
+
+        table_id = unpaid_bill.get("桌台编号")
+        created_at = unpaid_bill.get("创建时间")
+
+        # 兼容旧测试和旧 JSON 结构：没有独立字段时退回解析旧编号。
+        # 新数据库查询会直接带 "桌台编号" 和 "创建时间"，不依赖编号格式。
+        if table_id is None or created_at is None:
+            legacy_table_id, separator, created_at_text = order_id.rpartition("_")
+            if (
+                not separator
+                or not legacy_table_id
+                or not created_at_text.isdigit()
+            ):
+                return {
+                    "status": "error",
+                    "error_type": "UnpaidOrderIdFormatError",
+                    "data": None,
+                    "message": f"未支付订单编号格式错误：{order_id}"
+                }
+            if table_id is None:
+                table_id = legacy_table_id
+            if created_at is None:
+                created_at = int(created_at_text)
+
+        if not isinstance(table_id, str) or not table_id:
+            return {
+                "status": "error",
+                "error_type": "UnpaidOrderTableIdFormatError",
+                "data": None,
+                "message": f"未支付订单 {order_id} 的桌台编号格式错误"
+            }
+
+        if isinstance(created_at, str) and created_at.isdigit():
+            created_at = int(created_at)
+
+        if type(created_at) not in (int, float):
+            return {
+                "status": "error",
+                "error_type": "UnpaidOrderCreateTimeFormatError",
+                "data": None,
+                "message": f"未支付订单 {order_id} 的创建时间格式错误"
+            }
+
+        created_at = int(created_at)
 
         payment_status = unpaid_bill.get("支付状态")
 
@@ -1834,7 +1902,7 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
         frontend_orders.append({
             "order_id": order_id,
             "table_id": table_id,
-            "created_at": int(created_at_text),
+            "created_at": created_at,
             "total_amount": total_amount,
             "consumption_details": frontend_consumption_details
         })
@@ -1858,7 +1926,8 @@ def two_get_frontend_unpaid_orders_info(all_unpaid_orders: dict) -> dict:
 def two_create_unpaid_bill(
     table_id: str,
     selected_consumptions: list,
-    current_time: int
+    current_time: int,
+    current_time_ms: int | None = None
 ) -> dict:
     # 准备创建未支付订单需要落库的数据。
     #
@@ -1866,13 +1935,15 @@ def two_create_unpaid_bill(
     # 1. 找到客人本次选择的真实消费记录
     # 2. 确认每条消费都已经有确定金额
     #
-    # current_time 由控制层取好后传入；
+    # current_time（秒）用于订单的创建时间；
+    # current_time_ms（毫秒）只用于生成订单编号，两者由控制层从
+    # 同一次时钟读取中取得。
     # 本函数不获取系统当前时间，只使用入参。
     #
     # 本函数负责：
     # 1. 检查入参和消费金额
     # 2. 计算本次结账总金额
-    # 3. 用传入的时间生成订单编号（桌号_当前时间戳）
+    # 3. 用传入的毫秒时间生成订单编号（桌号_毫秒时间戳_随机后缀）
     # 4. 返回要落库的订单数据
     #
     # 本函数不负责：
@@ -1974,9 +2045,18 @@ def two_create_unpaid_bill(
 
     total_amount = _quantize_money(total_amount)
 
-    # 桌号 + 创建订单时间，组成订单编号。
-    # 例如：1_1757688000
-    order_id = f"{table_id}_{current_time}"
+    # 桌号 + 毫秒时间 + 随机后缀组成订单编号。
+    # 创建时间字段仍保存秒级时间，便于前端和旧数据统一。
+    order_id, id_error = _build_business_id_or_error(
+        "",
+        table_id,
+        current_time,
+        current_time_ms,
+        "OrderIdFormatError",
+        "订单编号"
+    )
+    if id_error is not None:
+        return id_error
 
     # 组装要写入数据库的订单数据。
     # 不再组装 JSON 时代的“未支付订单对象”。
@@ -2007,7 +2087,7 @@ def two_check_unpaid_order_for_payment(order_data: dict, payment_data: dict) -> 
     #
     # 前端传入的数据例如：
     # {
-    #     "订单编号": "1_1757688000"
+    #     "订单编号": "1_tmv7ggbkz_v4bq51"
     # }
 
     if not isinstance(payment_data, dict):
@@ -2027,7 +2107,7 @@ def two_check_unpaid_order_for_payment(order_data: dict, payment_data: dict) -> 
         }
 
     # 取出前端指定的订单编号。
-    # 例如：order_id = "1_1757688000"
+    # 例如：order_id = "1_tmv7ggbkz_v4bq51"
     order_id = payment_data["订单编号"]
 
     if not isinstance(order_id, str) or not order_id:
@@ -2352,7 +2432,12 @@ def two_check_product_can_be_ordered(product_id: str, product_info: dict, produc
         "message": f"{product_info['商品名称']} 可以销售，数量 {product_count}"
     }
 #准备要写进去的东西
-def two_create_product_consumption(table_id: str, flow_box: dict, current_time: int) -> dict:
+def two_create_product_consumption(
+    table_id: str,
+    flow_box: dict,
+    current_time: int,
+    current_time_ms: int | None = None
+) -> dict:
     # 创建一条商品待结算消费
     #
     # 前一步已经完成：
@@ -2372,8 +2457,9 @@ def two_create_product_consumption(table_id: str, flow_box: dict, current_time: 
     # 3. 不扣减库存
     # 4. 不访问数据库
     #
-    # current_time 由 controller 一次性取好再传进来，
-    # 消费记录编号和数据库的“创建时间”共用同一个时间戳。
+    # current_time 用于数据库“创建时间”（秒级）；
+    # current_time_ms 只用于生成编号（毫秒级）。
+    # 两者由 controller 从同一次时钟读取中取得。
 
     # 取出经过前一步检查的商品编号。
     # 例如：product_id = "P_001"
@@ -2419,9 +2505,17 @@ def two_create_product_consumption(table_id: str, flow_box: dict, current_time: 
     )
 
     # S 代表商品消费。
-    # 桌子号码 + 创建商品消费的时间，组成消费记录编号。
-    # 例如：S_1_1757688000
-    consumption_id = f"S_{table_id}_{current_time}"
+    # 编号使用毫秒时间 + 随机后缀；创建时间字段仍保存秒级时间。
+    consumption_id, id_error = _build_business_id_or_error(
+        "S",
+        table_id,
+        current_time,
+        current_time_ms,
+        "ProductConsumptionIdFormatError",
+        "商品消费编号"
+    )
+    if id_error is not None:
+        return id_error
 
     # 组装一条完整商品消费记录。
     #

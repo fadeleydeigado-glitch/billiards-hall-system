@@ -42,6 +42,11 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.id_utils import parse_business_id_time
+
 # ============================================================
 # 连接库：优先 mysql-connector-python，回退 pymysql
 # ============================================================
@@ -132,17 +137,16 @@ def fmt_money(v):
 
 def parse_ts_from_id(consumption_id):
     """
-    从消费记录编号解析时间戳。
-    编号规则：T_<桌台编号>_<开台时间戳>  或  S_<桌台编号>_<下单时间戳>
-    例：S_1_1757688000 -> 1757688000。解析失败返回 None。
+    从消费记录编号解析秒级时间戳。
+
+    兼容两种规则：
+    - 旧：T_<桌台>_<秒级时间戳> / S_<桌台>_<秒级时间戳>
+    - 新：T_<桌台>_t<毫秒时间戳的36进制>_<随机后缀>
+          S_<桌台>_t<毫秒时间戳的36进制>_<随机后缀>
+
+    解析失败返回 None。
     """
-    parts = str(consumption_id).split("_")
-    if len(parts) >= 3:
-        try:
-            return int(parts[-1])
-        except ValueError:
-            return None
-    return None
+    return parse_business_id_time(consumption_id)
 
 
 def print_ids(ids, per_line=6):
@@ -372,7 +376,7 @@ def check_s_create_time(cur, issues):
               % ("消费记录编号", "桌台", "创建时间", "编号内时间"))
         for cid, tid, ctime, id_ts in mismatch:
             print("    %-24s %-8s %-12s %-12s" % (cid, tid, ctime, id_ts))
-        print("    >> 编号规则 S_<桌台>_<下单时间戳>，编号内时间戳才是正确下单时间。")
+        print("    >> 编号内时间戳应与创建时间落在同一秒；新旧编号规则均由公共解析函数处理。")
 
     if n == 0:
         print("  时间字段检查: 通过")

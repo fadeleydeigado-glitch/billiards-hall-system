@@ -21,6 +21,10 @@ ENV/
 .env.*
 !.env.example
 
+# ---- 本地机密凭据与数据库备份（不提交） ----
+.secrets/
+backups/
+
 # ---- 日志与临时文件 ----
 logs/
 *.log

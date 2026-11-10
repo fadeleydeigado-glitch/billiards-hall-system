@@ -266,6 +266,35 @@ class FrontendDecimalTests(unittest.TestCase):
             )
         )
 
+    def test_unpaid_order_uses_explicit_fields_instead_of_parsing_new_id(self):
+        order_id = "1_tmv7ggbkz_v4bq51"
+        all_unpaid_orders = {
+            order_id: {
+                "桌台编号": "1",
+                "创建时间": 1791942761,
+                "支付状态": "未支付",
+                "总金额": Decimal("6.30"),
+                "消费明细": [
+                    {
+                        "消费记录编号": "S_1_tmv7ggbkz_lqrv6v",
+                        "类型": "商品",
+                        "商品名称": "可乐",
+                        "单价": Decimal("3.15"),
+                        "数量": 2,
+                        "金额": Decimal("6.30"),
+                    },
+                ],
+            }
+        }
+
+        result = two_get_frontend_unpaid_orders_info(all_unpaid_orders)
+
+        self.assertEqual(result["status"], "success")
+        order = result["data"]["未支付订单"][0]
+        self.assertEqual(order["order_id"], order_id)
+        self.assertEqual(order["table_id"], "1")
+        self.assertEqual(order["created_at"], 1791942761)
+
 
 class DecimalJsonTests(unittest.TestCase):
     def test_stdlib_json_cannot_serialize_decimal_directly(self):

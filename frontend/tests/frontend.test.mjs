@@ -10,6 +10,7 @@ import {
     formatMoney,
     formatRate
 } from "../js/format.js";
+import { requestJson } from "../js/api.js";
 
 test("elapsedSeconds derives a non-negative integer duration", () => {
     assert.equal(elapsedSeconds(1000, 1060), 60);
@@ -70,4 +71,33 @@ test("the table card template is defined once and loaded as a component", async 
     assert.equal(indexSource.includes("/assets/vendor/vue.global.prod.js"), true);
     assert.equal(cardSource.includes("template:"), true);
     assert.equal(cardSource.includes("table-card-title"), true);
+});
+
+test("requestJson keeps the backend error payload on non-2xx responses", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+        JSON.stringify({
+            status: "error",
+            error_type: "TableOccupied",
+            data: null,
+            message: "3 号桌正在使用中"
+        }),
+        {
+            status: 409,
+            headers: { "Content-Type": "application/json" }
+        }
+    );
+
+    try {
+        const payload = await requestJson(
+            "/tables/open?table_id=3",
+            { method: "POST" }
+        );
+
+        assert.equal(payload.status, "error");
+        assert.equal(payload.error_type, "TableOccupied");
+        assert.equal(payload.message, "3 号桌正在使用中");
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
 });

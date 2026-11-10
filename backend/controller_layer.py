@@ -1,5 +1,6 @@
 from .io_layer import (
     one_get_current_time,
+    one_get_current_time_pair,
 
     # 前端查询接口使用的 MySQL 函数。
     one_load_products_from_mysql,
@@ -396,9 +397,14 @@ def three_open_table(table_id: str, source: str = "人") -> dict:
 
         # flow_box 需要用到事务外读到的 table_info（每小时价格），
         # 创建好以后交给下面的事务负责写入。
-        current_time = one_get_current_time()
+        current_time, current_time_ms = one_get_current_time_pair()
 
-        flow_box_result = two_create_flow_box(table_id, current_time, table_info)
+        flow_box_result = two_create_flow_box(
+            table_id,
+            current_time,
+            table_info,
+            current_time_ms
+        )
 
         if flow_box_result["status"] != "success":
             return flow_box_result
@@ -799,13 +805,14 @@ def three_create_unpaid_order(selected_data: dict, source: str = "人") -> dict:
 
         # ==================== 第八步：准备订单数据 ====================
 
-        # 订单编号和创建时间共用同一个时间戳，由控制层统一获取。
-        order_time = one_get_current_time()
+        # 业务时间取秒级，编号时间取毫秒级，两者由同一次时钟读取取得。
+        order_time, order_time_ms = one_get_current_time_pair()
 
         prepare_result = two_create_unpaid_bill(
             table_id,
             selected_consumptions,
-            order_time
+            order_time,
+            order_time_ms
         )
 
         if prepare_result["status"] != "success":
@@ -941,7 +948,7 @@ def three_confirm_payment(payment_data: dict, source: str = "人") -> dict:
         # 人工确认收款。
         #
         # payment_data 由前端传入，例如：
-        # {"订单编号": "1_1757688000"}
+        # {"订单编号": "1_tmv7ggbkz_v4bq51"}
         #
         # 调用前提：
         # 店员已经核实钱款到账，并点击“确认收款”。
@@ -1160,13 +1167,14 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
 
         # ==================== 第八步：组装商品消费 ====================
 
-        # 时间戳只取一次，消费记录编号和数据库“创建时间”共用同一个值。
-        current_time = one_get_current_time()
+        # 创建时间用秒级，消费编号用毫秒级，两者由同一次时钟读取取得。
+        current_time, current_time_ms = one_get_current_time_pair()
 
         create_result = two_create_product_consumption(
             table_id,
             check_data,
-            current_time
+            current_time,
+            current_time_ms
         )
 
         if create_result["status"] != "success":

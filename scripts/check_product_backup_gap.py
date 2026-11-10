@@ -17,13 +17,12 @@
 
 创建时间说明：
 - ongoing 记录从 ongoing_consumptions.创建时间 取得；
-- order 记录优先从 S_{桌台}_{时间戳} 解析；
+- order 记录优先从 S_ 编号解析（兼容毫秒进制编号和旧秒级编号）；
 - 解析失败时回退到 orders.创建时间，并打印警告。
 """
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -32,6 +31,11 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.id_utils import parse_business_id_time
 
 
 MAIN_DB_CONFIG = {
@@ -129,11 +133,8 @@ def connect_mysql(config):
 
 
 def parse_created_time(consumption_id):
-    """从 S_{桌台}_{时间戳} 中解析创建时间；解析失败返回 None。"""
-    match = re.match(r"^S_.+_(\d+)$", str(consumption_id))
-    if match is None:
-        return None
-    return int(match.group(1))
+    """从 S_ 编号解析秒级创建时间；兼容新旧格式。"""
+    return parse_business_id_time(consumption_id)
 
 
 def resolve_created_time(source, consumption_id, order_created_time):

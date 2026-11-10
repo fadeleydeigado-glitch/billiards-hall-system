@@ -14,7 +14,7 @@
 
 > 当前定位：可本地运行、可测试的单店业务系统，不是高并发平台，也不是
 > 完整 SaaS。项目目前没有登录、角色权限、租户隔离和真实支付回调；
-> AI 员工部分只有设计文档，尚未进入代码实现。
+> AI 员工部分已决定暂不实现，只保留设计文档。
 
 ## 功能
 
@@ -137,7 +137,27 @@ WHERE id = %s AND `库存` >= %s;
 - HTTP JSON 出口把金额转成字符串，避免标准库 JSON 无法序列化 `Decimal`；
 - 前端只做展示，不重新计算台费或订单金额。
 
-### 5. 核心备份：事务性 outbox + 独立 worker
+### 5. 业务编号：毫秒时间 + 随机后缀
+
+开台、商品消费和订单编号统一由 `backend/id_utils.py` 生成：
+
+```text
+T_<桌号>_t<毫秒时间戳的36进制>_<6位36进制随机>
+S_<桌号>_t<毫秒时间戳的36进制>_<6位36进制随机>
+<桌号>_t<毫秒时间戳的36进制>_<6位36进制随机>
+```
+
+这样做的原因是：
+
+- 同一桌同一秒内发生多次操作时，不再生成相同编号；
+- 编号最多仍为 30 个字符，不需要改动现有 id 列和外键；
+- 旧编号 `T_桌号_秒级时间戳` / `S_桌号_秒级时间戳` 仍能被解析；
+- 业务时间字段继续保存秒级 Unix 时间，前端时间显示和旧数据不受影响。
+
+`订单编号` 只作为不透明唯一标识使用；前端展示需要的桌号和创建时间从
+`orders` 表的字段读取，不再从编号字符串里反解析。
+
+### 6. 核心备份：事务性 outbox + 独立 worker
 
 核心备份不直接在业务事务里写第二个数据库，而是使用 outbox：
 
@@ -168,7 +188,7 @@ outbox_worker
 outbox 只用于核心备份，不用于业务日志。业务日志仍然同步写入
 `logs/business.log`，写失败只提示，不阻断主流程。
 
-### 6. 测试与数据检查
+### 7. 测试与数据检查
 
 项目包含三类验证：
 
@@ -186,6 +206,8 @@ outbox 只用于核心备份，不用于业务日志。业务日志仍然同步�
 ```text
 backend/
   api_layer.py            FastAPI 路由
+  schemas.py              Pydantic 请求模型
+  errors.py               HTTP 状态码映射与统一错误响应
   controller_layer.py     流程编排、事务边界、业务日志
   business_layer.py       纯校验、纯计算、数据组装
   io_layer.py             MySQL 读写、事务管理
@@ -320,8 +342,21 @@ python -m backend.outbox_worker --once
 | POST | `/payments/confirm` | 确认收款 |
 | POST | `/products/consumption` | 加商品消费 |
 
-当前 API 业务错误通常仍返回 HTTP 200，错误信息放在四键结果字典中；这是
-当前前端可用的内部约定，不是完整的对外 REST 错误契约。
+请求体和查询参数由 Pydantic 模型与 FastAPI `Query` 约束校验；校验失败返回 HTTP 422
+（JSON 语法错误返回 400），响应仍是四键结构。业务错误按 `error_type`
+映射状态码：
+
+| 情况 | HTTP 状态 |
+|---|---:|
+| 成功 | 200 |
+| 请求体不是合法 JSON | 400 |
+| 字段缺失、类型错误、数量小于等于 0 | 422 |
+| 桌台、商品、订单或消费记录不存在 | 404 |
+| 桌已占、订单已付、库存不足、重复关台 | 409 |
+| 数据库异常或其他服务端错误 | 500 |
+
+Pydantic 只检查请求形状和字段边界；桌台是否空闲、库存是否足够、订单
+是否未支付等业务规则仍然由 controller / business 层判断。
 
 ## 测试与检查
 
@@ -329,7 +364,7 @@ python -m backend.outbox_worker --once
 
 ```powershell
 python -m compileall -q backend tests scripts
-python -m unittest tests.test_decimal_money tests.test_product_backup
+python -m unittest tests.test_api_errors tests.test_request_schemas tests.test_id_utils tests.test_decimal_money tests.test_product_backup
 
 cd frontend
 node --check app.js
@@ -401,24 +436,32 @@ python scripts/check_product_backup_gap.py --fix
 
 ## 当前边界
 
-这个项目已经能完整跑通单店业务闭环，但以下能力尚未实现，不应在简历或
-对外介绍中写成已完成：
+这个项目已经能完整跑通单店业务闭环，后端工程化也已完成一部分：
+
+- 已使用独立应用账号 `billiards_app`，不再用 root 跑业务；
+- 已有主库/备份库连接池，并记录了 `/frontend/refresh` 的改前/改后压测；
+- 已有 Pydantic 请求模型和 HTTP 错误状态码映射；
+- 已有毫秒时间 + 随机后缀的业务编号；
+- 已有 outbox 积压、死信和备份缺口检查脚本。
+
+以下能力仍未实现，不应在简历或对外介绍中写成已完成：
 
 - 登录、角色权限、租户隔离；
 - 真实支付回调（当前「确认收款」只记录状态，不执行扣款）；
 - 生产级监控、告警和部署验证；
-- 数据库连接池；
-- 正式的 Pydantic 请求模型和 HTTP 错误状态码契约；
-- 真实并发压测和多实例验证；
-- AI 员工的运行代码、工具注册表、规则引擎和评测集；
-- Redis、LangGraph、RAG 等 AI 应用组件。
+- `/health`、请求 ID 和慢查询日志；
+- 写路径的真实并发测试和多实例验证（目前只有 `/frontend/refresh` 的本机只读压测）；
+- 备份恢复演练；
+- AI 员工的运行代码、工具注册表、规则引擎和评测集（暂不推进）；
+- Redis、LangGraph、RAG 等 AI 应用组件（暂不纳入路线）。
 
 当前是单店、小数据量场景，库存、桌台和支付状态必须保持 MySQL 强一致。
 项目没有为了简历关键词把库存放进 Redis，也没有把业务日志塞进 outbox。
 
 ## 设计文档
 
+- [后端剩余工作与下一步](docs/后端剩余工作与下一步.md)
 - [Outbox 异步备份设计](docs/OUTBOX_ASYNC_BACKUP.md)
 - [业务写路径与异步边界](docs/设计思路总结.md)
-- [AI 员工目标架构与落地路线](docs/AI_EMPLOYEE.md)（设计，未实现）
+- [AI 员工目标架构与落地路线](docs/AI_EMPLOYEE.md)（历史设计，暂不实现）
 - [阶段性工程复盘](docs/项目架构复盘与改进清单.md)（部分结论已被后续提交更新）

@@ -4,6 +4,7 @@ from pathlib import Path
 from decimal import Decimal
 
 import pymysql
+from dbutils.pooled_db import PooledDB
 from dotenv import load_dotenv
 
 
@@ -38,22 +39,54 @@ BACKUP_DB_CONFIG = {
     "charset": "utf8mb4"
 }
 
+
+# ==================== MySQL 连接池 ====================
+# 主库连接池：单店场景 10 条上限足够。
+# blocking=True 表示池满时排队等待，而不是直接报错。
+# ping=1 表示从池里取连接时先探活；reset=True 表示归还时重置会话，
+# 避免上一位调用方未提交的事务或会话状态污染下一次使用。
+MAIN_POOL = PooledDB(
+    creator=pymysql,
+    maxconnections=10,
+    mincached=2,
+    # 让缓存上限与最大并发数一致，避免 10 并发时连接被反复关闭再重建。
+    maxcached=10,
+    blocking=True,
+    ping=1,
+    reset=True,
+    **DB_CONFIG,
+)
+
+# 备份库使用独立连接池，绝不和主库共用连接。
+BACKUP_POOL = PooledDB(
+    creator=pymysql,
+    maxconnections=5,
+    mincached=1,
+    maxcached=3,
+    blocking=True,
+    ping=1,
+    reset=True,
+    **BACKUP_DB_CONFIG,
+)
+
+
 def one_get_mysql_connection():
-    # 作用：内部连接助手，按照 DB_CONFIG 建立并返回一个 pymysql 连接。
+    # 作用：从主库连接池借出一条连接。
     # 接收：无。
-    # 说明：仅供新增的 MySQL 函数内部使用，连接用完必须由调用方关闭。
+    # 说明：调用方仍然用 connection.close() 归还连接；池化后 close 不会物理断开，
+    #       而是把连接还回池子，归还时由 PooledDB 执行 reset。
     # 连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
-    return pymysql.connect(**DB_CONFIG)
+    return MAIN_POOL.connection()
 
 
 def one_get_backup_mysql_connection():
-    # 作用：建立并返回一条到独立备份库的连接。
+    # 作用：从独立备份库连接池借出一条连接。
     # 接收：无。
     # 说明：
     # - 绝不能把主库 connection / cursor 传给备份写入函数；
-    # - 备份库连接必须由本助手新建，用完由调用方关闭；
+    # - 备份库连接必须从本助手获取，用完由调用方 close 归还到备份池；
     # - 备份库连接失败时抛异常，由 worker 捕获并让事件进入重试。
-    return pymysql.connect(**BACKUP_DB_CONFIG)
+    return BACKUP_POOL.connection()
 
 
 def one_convert_mysql_error(error: Exception, action: str) -> dict:
@@ -86,6 +119,17 @@ def one_get_current_time() -> int:
     # 获取当前时间戳，返回 int 类型
     # time.time() 原本是小数，这里统一转成整数时间戳。
     return int(time.time())
+
+
+def one_get_current_time_pair() -> tuple[int, int]:
+    # 一次读取时钟，同时返回：
+    # 1. 秒级业务时间：继续写入开台时间、创建时间、支付时间等字段；
+    # 2. 毫秒级编号时间：只用于生成业务编号，让编号精度更高。
+    #
+    # 同一次 time_ns() 取整，保证两个值来自同一个时刻，不会因为
+    # 分开调用而跨秒。
+    now_ns = time.time_ns()
+    return now_ns // 1_000_000_000, now_ns // 1_000_000
     
 def one_change_time_format(timestamp: int) -> str:
     # 把时间戳转换成人类容易阅读的时间格式
@@ -376,7 +420,13 @@ def one_load_all_ongoing_from_mysql() -> dict:
 def one_load_unpaid_orders_from_mysql() -> dict:
     # 作用：读取全部"未支付"订单（已支付的不查），还原成 JSON 时代 unpaid order.json 的整体结构。
     # 接收：无。
-    # 返回：四键结果字典；data 为 {订单编号: {"支付状态": "未支付", "消费明细": [...], "总金额": 数字}}；
+    # 返回：四键结果字典；data 为 {订单编号: {
+    #       "桌台编号": 桌号,
+    #       "创建时间": 秒级时间戳,
+    #       "支付状态": "未支付",
+    #       "消费明细": [...],
+    #       "总金额": 数字
+    #   }}；
     #       消费明细是列表，不是字典；空表时 data 为 {}，status 仍为 "success"。
     connection = None
     try:
@@ -386,7 +436,8 @@ def one_load_unpaid_orders_from_mysql() -> dict:
                 "SELECT o.order_id, o.`支付状态`, o.`总金额`, "
                 "oo.consumption_id, oo.type_code, "
                 "otf.`开台时间`, otf.`关台时间`, otf.`每小时价格`, otf.`金额`, "
-                "opc.`商品编号`, opc.`商品名称`, opc.`单价`, opc.`数量`, opc.`金额` "
+                "opc.`商品编号`, opc.`商品名称`, opc.`单价`, opc.`数量`, opc.`金额`, "
+                "o.`桌台编号`, o.`创建时间` "
                 "FROM orders AS o "
                 "LEFT JOIN order_consumptions AS oo "
                 "ON oo.order_id = o.order_id "
@@ -395,7 +446,7 @@ def one_load_unpaid_orders_from_mysql() -> dict:
                 "LEFT JOIN order_product_consumptions AS opc "
                 "ON opc.consumption_id = oo.consumption_id AND opc.order_id = oo.order_id "
                 "WHERE o.`支付状态` = %s "
-                "ORDER BY o.order_id, oo.consumption_id",
+                "ORDER BY o.`创建时间`, o.order_id, oo.consumption_id",
                 ("未支付",)
             )
             rows = cursor.fetchall()
@@ -406,6 +457,8 @@ def one_load_unpaid_orders_from_mysql() -> dict:
 
             if order_id not in unpaid_orders:
                 unpaid_orders[order_id] = {
+                    "桌台编号": str(row[14]),
+                    "创建时间": one_convert_mysql_value(row[15]),
                     "支付状态": row[1],
                     "消费明细": [],
                     "总金额": one_convert_mysql_value(row[2])
@@ -651,7 +704,8 @@ def one_insert_ongoing_product_consumption_to_mysql(cursor, table_id, consumptio
     # 作用：新增一条待结算商品消费（挂账），主表 1 行 + 明细表 1 行。
     # 接收：cursor、桌号、消费记录编号、商品编号、商品名称、单价、数量、金额、创建时间。
     # 返回：四键结果字典；data 为写入成功的商品消费记录。
-    # 注意：created_time 由上层传入，和生成消费记录编号的时间戳一致，本函数不自己取时间。
+    # 注意：created_time 是秒级业务时间，由上层传入；消费编号由上层
+    # 使用毫秒时间和随机后缀生成，本函数不自己取时间。
     try:
         cursor.execute(
             "INSERT INTO ongoing_consumptions (id, `桌台编号`, type_code, `创建时间`) "

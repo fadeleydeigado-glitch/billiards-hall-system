@@ -1,6 +1,8 @@
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -15,13 +17,38 @@ from .controller_layer import (
     three_confirm_payment,
     three_add_product_consumption,
 )
+from .errors import build_validation_error_payload, status_code_for_result
 from .json_utils import decimal_to_json
+from .schemas import (
+    ConfirmPaymentRequest,
+    CreateUnpaidOrderRequest,
+    ProductId,
+    TableId,
+)
 
 
 app = FastAPI()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request, exc):
+    # FastAPI 默认的 422 响应不是四键结构；这里统一成项目约定。
+    # JSON 本身语法错误按 400 返回，JSON 能解析但字段不合格按 422 返回。
+    errors = exc.errors()
+    is_bad_json = any(
+        error.get("type") == "json_invalid"
+        for error in errors
+    )
+    return JSONResponse(
+        status_code=400 if is_bad_json else 422,
+        content=build_validation_error_payload(
+            errors,
+            is_bad_json=is_bad_json,
+        ),
+    )
 
 
 @app.get("/")
@@ -50,7 +77,10 @@ if FRONTEND_DIR.exists():
 def _json_response(result: dict) -> JSONResponse:
     # 金额在业务层统一是 Decimal；HTTP 边界显式转成字符串，
     # 避免 json.dumps 直接序列化 Decimal 时报错或偷偷变成 float。
-    return JSONResponse(content=decimal_to_json(result))
+    return JSONResponse(
+        content=decimal_to_json(result),
+        status_code=status_code_for_result(result),
+    )
 
 
 @app.get("/frontend/refresh")
@@ -72,40 +102,44 @@ def api_get_frontend_unpaid_orders_data():
 
 
 @app.get("/tables/checkout-options")
-def api_get_frontend_checkout_options(table_id: str):
+def api_get_frontend_checkout_options(table_id: TableId):
     # 对应第三层函数 three_get_frontend_checkout_options。
     return _json_response(three_get_frontend_checkout_options(table_id))
 
 
 @app.post("/tables/open")
-def api_open_table(table_id: str):
+def api_open_table(table_id: TableId):
     # 对应第三层函数 three_open_table。
     return _json_response(three_open_table(table_id))
 
 
 @app.post("/tables/close")
-def api_close_table(table_id: str):
+def api_close_table(table_id: TableId):
     # 对应第三层函数 three_close_table。
     return _json_response(three_close_table(table_id))
 
 
 @app.post("/orders/unpaid")
-def api_create_unpaid_order(selected_data: dict):
+def api_create_unpaid_order(payload: CreateUnpaidOrderRequest):
     # 对应第三层函数 three_create_unpaid_order。
-    return _json_response(three_create_unpaid_order(selected_data))
+    return _json_response(
+        three_create_unpaid_order(payload.model_dump(by_alias=True))
+    )
 
 
 @app.post("/payments/confirm")
-def api_confirm_payment(payment_data: dict):
+def api_confirm_payment(payload: ConfirmPaymentRequest):
     # 对应第三层函数 three_confirm_payment。
-    return _json_response(three_confirm_payment(payment_data))
+    return _json_response(
+        three_confirm_payment(payload.model_dump(by_alias=True))
+    )
 
 
 @app.post("/products/consumption")
 def api_add_product_consumption(
-    table_id: str,
-    product_id: str,
-    product_count: int,
+    table_id: TableId,
+    product_id: ProductId,
+    product_count: Annotated[int, Query(gt=0)],
 ):
     # 对应第三层函数 three_add_product_consumption。
     return _json_response(
