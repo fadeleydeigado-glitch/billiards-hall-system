@@ -12,6 +12,7 @@ frontend/
 ├── app.js                     页面状态、接口调用和业务交互
 ├── js/useTables.js            桌台字典与共享时钟
 ├── js/api.js                  后端接口适配
+├── js/idempotency.js          UUID 生成与失败重试复用
 ├── js/format.js               时间、时长的纯展示格式化
 ├── js/components/TableCard.js 唯一的桌卡模板
 ├── vendor/vue.global.prod.js  本地 Vue 3.5.13，无 CDN 依赖
@@ -25,6 +26,8 @@ frontend/
 - 桌台、商品和订单状态由 FastAPI 返回，前端只维护页面展示所需的响应式状态。
 - 已用时间由 `当前时间 - 后端开始时间` 派生，不单独保存。
 - 前端不计算台费、订单合计或收款金额；金额只展示后端返回值。
+- 加商品提交时生成 `Idempotency-Key`，失败重试复用旧键，成功后才清空。
+- 开台遇到未结账消费时先展示后端明细，确认后才带 `confirm_unsettled=true` 重试。
 - `TableCard` 是所有桌台共用的唯一模板。
 
 ## 本地运行

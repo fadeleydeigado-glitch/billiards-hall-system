@@ -99,7 +99,7 @@
                     <span
                         class="result-badge"
                         :class="'is-' + resultTone"
-                    >{{ resultTone === "success" ? "成功" : resultTone === "error" ? "失败" : "待操作" }}</span>
+                    >{{ resultTone === "success" ? "成功" : resultTone === "error" ? "失败" : resultTone === "warning" ? "待确认" : "待操作" }}</span>
                 </summary>
                 <pre>{{ resultText }}</pre>
             </details>
@@ -132,7 +132,7 @@
                 </header>
 
                 <div class="action-grid">
-                    <form class="action-card" data-action="open-table" @submit.prevent="submitOpenTable">
+                    <form class="action-card" data-action="open-table" @submit.prevent="submitOpenTable()">
                         <div class="action-card-heading">
                             <span class="step-number">01</span>
                             <div>
@@ -140,7 +140,56 @@
                                 <p>为当前桌台创建一条新的使用记录。</p>
                             </div>
                         </div>
+
+                        <section
+                            v-if="openWarning.visible"
+                            class="open-warning-panel"
+                            role="alert"
+                        >
+                            <div class="open-warning-header">
+                                <strong>检测到未结账消费</strong>
+                                <span>{{ openWarningSummary }}</span>
+                            </div>
+                            <p class="open-warning-copy">
+                                继续开台会和上一轮消费混在同一张结账单里，建议先结账。
+                            </p>
+                            <div class="open-warning-list">
+                                <div
+                                    v-for="option in openWarning.items"
+                                    :key="option.consumption_id"
+                                    class="open-warning-item"
+                                >
+                                    <span class="checkout-title">
+                                        <span>{{ option.display_name }}</span>
+                                        <strong>{{ checkoutAmount(option) }}</strong>
+                                    </span>
+                                    <span class="checkout-description">
+                                        {{ checkoutDescription(option) }}
+                                    </span>
+                                    <span
+                                        v-if="option.unavailable_message"
+                                        class="checkout-warning"
+                                    >{{ option.unavailable_message }}</span>
+                                </div>
+                            </div>
+                            <div class="button-row">
+                                <button
+                                    class="button button-quiet"
+                                    type="button"
+                                    :disabled="actionBusy.open"
+                                    @click="goToCheckoutFromOpenWarning"
+                                >去结账</button>
+                                <button
+                                    class="button button-primary"
+                                    type="button"
+                                    :disabled="!openWarning.canConfirm || actionBusy.open"
+                                    @click="confirmOpenWithUnsettled"
+                                >{{ actionBusy.open ? "处理中…" : "仍然开台" }}</button>
+                            </div>
+                        </section>
+
                         <button
+                            v-if="!openWarning.visible"
                             class="button button-primary"
                             type="submit"
                             :disabled="actionBusy.open"

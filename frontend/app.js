@@ -7,6 +7,7 @@ import {
     formatMoney
 } from "./js/format.js";
 import { TableCard } from "./js/components/TableCard.js";
+import { createIdempotencyKeyStore } from "./js/idempotency.js";
 import { useTables } from "./js/useTables.js";
 
 const { computed, onMounted, reactive, ref } = window.Vue;
@@ -53,6 +54,14 @@ const App = {
 
         const selectedTableId = ref(null);
         const dialogElement = ref(null);
+        const openWarning = reactive({
+            visible: false,
+            tableId: null,
+            items: [],
+            summary: null,
+            message: "",
+            canConfirm: false
+        });
 
         const openCount = computed(() => (
             tableList.value.filter((table) => table.isOpen).length
@@ -73,6 +82,18 @@ const App = {
                 return "未选择桌台";
             }
             return selectedTable.value.isOpen ? "使用中" : "空闲";
+        });
+        const openWarningSummary = computed(() => {
+            if (!openWarning.visible || !openWarning.summary) {
+                return "";
+            }
+
+            const count = openWarning.summary["消费笔数"] ?? 0;
+            const amount = openWarning.summary["金额完整"] === false
+                ? "金额待确定"
+                : formatMoney(openWarning.summary["合计金额"]);
+
+            return `${count} 笔 · 合计 ${amount}`;
         });
 
         function setNotice(text, tone = "info") {
@@ -174,20 +195,80 @@ const App = {
             }
         }
 
-        async function submitOpenTable() {
+        function resetOpenWarning() {
+            openWarning.visible = false;
+            openWarning.tableId = null;
+            openWarning.items = [];
+            openWarning.summary = null;
+            openWarning.message = "";
+            openWarning.canConfirm = false;
+        }
+
+        function showOpenWarning(result, tableId) {
+            const data = result.data || {};
+
+            openWarning.visible = true;
+            openWarning.tableId = tableId;
+            openWarning.items = data["消费明细"] || [];
+            openWarning.summary = data["汇总"] || null;
+            openWarning.message = result.message || "该桌还有未结账消费";
+            openWarning.canConfirm = data["可确认开台"] === true;
+
+            resultText.value = JSON.stringify(result, null, 2);
+            resultTone.value = "warning";
+            setNotice(openWarning.message, "warning");
+        }
+
+        async function goToCheckoutFromOpenWarning() {
+            const tableId = openWarning.tableId || selectedTableId.value;
+
+            if (!tableId) {
+                return;
+            }
+
+            resetOpenWarning();
+            const loaded = await loadCheckoutOptions(tableId);
+
+            if (loaded) {
+                setNotice("已切换到结账明细，请先勾选并结账。", "info");
+            }
+        }
+
+        async function confirmOpenWithUnsettled() {
+            if (!openWarning.visible || !openWarning.canConfirm) {
+                return;
+            }
+
+            await submitOpenTable({ confirmUnsettled: true });
+        }
+
+        async function submitOpenTable(options = {}) {
             if (!selectedTableId.value || actionBusy.open) {
                 return;
             }
 
+            const confirmUnsettled = options.confirmUnsettled === true;
+            const tableId = selectedTableId.value;
             actionBusy.open = true;
 
             try {
-                const result = await api.openTable(selectedTableId.value);
-                publishOperation(result);
+                const result = await api.openTable(tableId, { confirmUnsettled });
 
                 if (result.status === "success") {
+                    resetOpenWarning();
+                    resetCheckoutState();
+                    publishOperation(result);
                     await refreshAfterMutation();
+                    return;
                 }
+
+                if (result.error_type === "TableHasUnsettledConsumptions") {
+                    showOpenWarning(result, tableId);
+                    return;
+                }
+
+                resetOpenWarning();
+                publishOperation(result);
             } finally {
                 actionBusy.open = false;
             }
@@ -217,6 +298,7 @@ const App = {
         const productLoading = ref(false);
         const selectedProductId = ref(null);
         const productCount = ref(1);
+        const addProductIdempotency = createIdempotencyKeyStore();
 
         const selectedProduct = computed(() => (
             selectedProductId.value === null
@@ -314,17 +396,32 @@ const App = {
             }
 
             normalizeProductCount();
+
+            let idempotencyKey;
+            try {
+                // 准备提交时才生成；失败重试继续复用，直到收到成功响应。
+                idempotencyKey = addProductIdempotency.getOrCreate();
+            } catch (error) {
+                setLocalError(
+                    "IdempotencyKeyGenerationFailed",
+                    error.message || "生成 Idempotency-Key 失败"
+                );
+                return;
+            }
+
             actionBusy.addProduct = true;
 
             try {
                 const result = await api.addProduct(
                     selectedTableId.value,
                     selectedProduct.value.product_id,
-                    productCount.value
+                    productCount.value,
+                    idempotencyKey
                 );
                 publishOperation(result);
 
                 if (result.status === "success") {
+                    addProductIdempotency.clear();
                     resetProductState();
                     await refreshAfterMutation();
                 }
@@ -584,6 +681,7 @@ const App = {
             const nextTableId = String(tableId);
 
             if (selectedTableId.value !== nextTableId) {
+                resetOpenWarning();
                 resetProductState();
                 resetCheckoutState();
                 resetPaymentState();
@@ -604,6 +702,7 @@ const App = {
 
         function handleDialogClosed() {
             selectedTableId.value = null;
+            resetOpenWarning();
             resetProductState();
             resetCheckoutState();
             resetPaymentState();
@@ -631,12 +730,14 @@ const App = {
             chooseProduct,
             chooseUnpaidOrder,
             closeTableDialog,
+            confirmOpenWithUnsettled,
             dialogElement,
             dialogTitle,
             formatClockTime,
             formatDateTime,
             formatDuration,
             formatMoney,
+            goToCheckoutFromOpenWarning,
             handleDialogBackdrop,
             handleDialogClosed,
             idleCount,
@@ -646,6 +747,8 @@ const App = {
             nowSeconds,
             normalizeProductCount,
             openCount,
+            openWarning,
+            openWarningSummary,
             openTableDialog,
             payment,
             paymentDescription,

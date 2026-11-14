@@ -12,6 +12,10 @@ from .id_utils import MAX_BUSINESS_ID_LENGTH, MAX_TABLE_ID_LENGTH
 # 避免以后其中一方变长时把两个限制混在一起。
 MAX_PRODUCT_ID_LENGTH = 10
 
+# Idempotency-Key 对业务层保持不透明，只限制数据库列宽和空值。
+# 前端使用 UUID，第三方客户端也可以传其他稳定字符串。
+MAX_IDEMPOTENCY_KEY_LENGTH = 128
+
 
 TableId = Annotated[
     str,

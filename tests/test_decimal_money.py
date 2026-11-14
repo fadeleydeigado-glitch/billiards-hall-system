@@ -18,6 +18,7 @@ from backend.business_layer import (
     two_create_product_consumption,
     two_create_unpaid_bill,
     two_get_frontend_checkout_options,
+    two_get_unsettled_consumption_summary,
     two_get_frontend_unpaid_orders_info,
 )
 from backend.json_utils import decimal_to_json
@@ -226,6 +227,69 @@ class FrontendDecimalTests(unittest.TestCase):
         self.assertIsInstance(option["amount"], Decimal)
         self.assertEqual(option["amount"], Decimal("0.00"))
         self.assertTrue(option["selectable"])
+
+    def test_unsettled_summary_reuses_checkout_option_fields(self):
+        table_consumption_box = {
+            "待结算消费": {
+                "T_1_1700000000": {
+                    "消费记录编号": "T_1_1700000000",
+                    "类型": "台位费",
+                    "开台时间": 1700000000,
+                    "关台时间": 1700003600,
+                    "每小时价格": Decimal("30.00"),
+                    "金额": Decimal("30.00"),
+                },
+                "S_1_1700000001": {
+                    "消费记录编号": "S_1_1700000001",
+                    "类型": "商品",
+                    "商品名称": "可乐",
+                    "单价": Decimal("3.00"),
+                    "数量": 2,
+                    "金额": Decimal("6.00"),
+                },
+            }
+        }
+
+        result = two_get_unsettled_consumption_summary(
+            table_consumption_box,
+            "1"
+        )
+
+        self.assertEqual(result["status"], "success")
+        data = result["data"]
+        self.assertEqual(len(data["消费明细"]), 2)
+        self.assertEqual(data["汇总"]["消费笔数"], 2)
+        self.assertEqual(data["汇总"]["台费笔数"], 1)
+        self.assertEqual(data["汇总"]["商品笔数"], 1)
+        self.assertEqual(data["汇总"]["合计金额"], Decimal("36.00"))
+        self.assertTrue(data["汇总"]["金额完整"])
+        self.assertTrue(data["可确认开台"])
+        self.assertIn("2 笔未结账消费", result["message"])
+        self.assertIn("¥36.00", result["message"])
+
+    def test_unsettled_summary_marks_incomplete_amounts(self):
+        table_consumption_box = {
+            "待结算消费": {
+                "S_1_1700000001": {
+                    "消费记录编号": "S_1_1700000001",
+                    "类型": "商品",
+                    "商品名称": "可乐",
+                    "单价": Decimal("3.00"),
+                    "数量": 2,
+                    "金额": None,
+                },
+            }
+        }
+
+        result = two_get_unsettled_consumption_summary(
+            table_consumption_box,
+            "1"
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(result["data"]["汇总"]["合计金额"])
+        self.assertFalse(result["data"]["汇总"]["金额完整"])
+        self.assertIn("金额待确定", result["message"])
 
     def test_unpaid_order_accepts_decimal_money_fields(self):
         all_unpaid_orders = {

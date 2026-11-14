@@ -9,13 +9,13 @@ test_full_flow.py
 五个写流程（都在 controller_layer.py 里）：
     开台    three_open_table(table_id)
     关台    three_close_table(table_id)
-    加商品  three_add_product_consumption(table_id, product_id, product_count)
+    加商品  three_add_product_consumption(table_id, product_id, product_count, idempotency_key)
     建订单  three_create_unpaid_order(selected_data)
     收款    three_confirm_payment(payment_data)
 
 结构：
     第零步  ：打印桌号 / 商品编号 / 商品列表；预检 1 号桌空闲（不空闲就停下，不强行开台）。
-    第一部分：正常流程（一条完整用户故事），6 个检查点；每步同时检查返回值与数据库状态。
+    第一部分：正常流程（一条完整用户故事），含开台前未结账提醒检查；每步同时检查返回值与数据库状态。
     第二部分：边界场景（故意乱来），10 个检查点；要求全部被拦截（status='error'）。
     第三部分：事务回滚，1 个检查点。
 
@@ -35,6 +35,7 @@ test_full_flow.py
 
 import sys
 import os
+import uuid
 from decimal import Decimal
 
 # 保证无论从哪里启动，都能导入项目根目录下的模块。
@@ -106,6 +107,11 @@ ADD_COUNT = 2           # 加 2 个
 
 checks = []     # [(编号, 名称, 是否通过, 失败详情)]
 skipped = []    # 跳过的检查点编号
+
+
+def new_idempotency_key(label):
+    # 每个独立测试动作使用新 Key；重试场景复用同一个变量。
+    return f"test-{label}-{uuid.uuid4()}"
 
 
 def describe(result):
@@ -273,6 +279,18 @@ paid_before = db_query_one(
 
 # ---------- 1-1 开台 ----------
 open_result = three_open_table(TABLE_ID)
+
+if open_result.get("error_type") == "TableHasUnsettledConsumptions":
+    warning_data = open_result.get("data") or {}
+    warning_summary = warning_data.get("汇总") or {}
+    add_check(
+        "1-1a",
+        "开台前检测到历史未结账消费并返回 409",
+        warning_summary.get("消费笔数", 0) > 0,
+        describe(open_result),
+    )
+    open_result = three_open_table(TABLE_ID, confirm_unsettled=True)
+
 open_data = open_result.get("data") or {}
 fee_id = open_data.get("消费记录编号")
 
@@ -321,7 +339,13 @@ add_check("1-1", "给 1 号桌开台：流程成功，且新增 1 条未关台�
 
 
 # ---------- 1-2 加商品 ----------
-add_result = three_add_product_consumption(TABLE_ID, PRODUCT_ID, ADD_COUNT)
+add_key = new_idempotency_key("normal-add")
+add_result = three_add_product_consumption(
+    TABLE_ID,
+    PRODUCT_ID,
+    ADD_COUNT,
+    idempotency_key=add_key,
+)
 add_data = add_result.get("data") or {}
 product_consumption_id = add_data.get("消费记录编号")
 
@@ -363,6 +387,28 @@ stock_after_add = db_query_one(
 )[0]
 conds.append((f"库存 {stock_before} → {stock_before - ADD_COUNT}",
               stock_after_add == stock_before - ADD_COUNT, f"实际={stock_after_add}"))
+
+replay_result = three_add_product_consumption(
+    TABLE_ID,
+    PRODUCT_ID,
+    ADD_COUNT,
+    idempotency_key=add_key,
+)
+replay_data = replay_result.get("data") or {}
+stock_after_replay = db_query_one(
+    "SELECT `库存` FROM products WHERE id = %s", (PRODUCT_ID,)
+)[0]
+conds.append((
+    "同一 Idempotency-Key 重放返回首次消费编号",
+    replay_result.get("status") == "success"
+    and replay_data.get("消费记录编号") == product_consumption_id,
+    f"首次={product_consumption_id}, 重放={describe(replay_result)}",
+))
+conds.append((
+    "同一 Idempotency-Key 重放不会再次扣库存",
+    stock_after_replay == stock_after_add,
+    f"首次扣减后={stock_after_add}, 重放后={stock_after_replay}",
+))
 
 product_outbox_event = (
     get_outbox_event(product_consumption_id, "core_backup_product")
@@ -604,14 +650,24 @@ add_error_check("2-2", "开不存在的桌（999）", three_open_table("999"))
 
 # 2-3：加一个不存在的商品。
 add_error_check("2-3", "加不存在的商品（P_999）",
-                three_add_product_consumption(TABLE_ID, "P_999", 1))
+                three_add_product_consumption(
+                    TABLE_ID,
+                    "P_999",
+                    1,
+                    idempotency_key=new_idempotency_key("missing-product"),
+                ))
 
 # 2-4：加超过库存的商品数量。
 stock_now = db_query_one(
     "SELECT `库存` FROM products WHERE id = %s", (PRODUCT_ID,)
 )[0]
 add_error_check("2-4", f"加超过库存的数量（{stock_now + 1} > {stock_now}）",
-                three_add_product_consumption(TABLE_ID, PRODUCT_ID, stock_now + 1))
+                three_add_product_consumption(
+                    TABLE_ID,
+                    PRODUCT_ID,
+                    stock_now + 1,
+                    idempotency_key=new_idempotency_key("stock-not-enough"),
+                ))
 
 # 2-5：关一个没开的桌。
 add_error_check("2-5", "关未开台的 2 号桌", three_close_table("2"))
@@ -700,7 +756,12 @@ def run_rollback_test():
         # —— 替换开始（只在本函数内部，只作用于 controller_layer 模块对象）——
         controller_layer.one_deduct_product_stock_in_mysql = fake_deduct
         # 调用真实流程：商品消费插入会真实执行，扣库存走到模拟函数后失败。
-        result = three_add_product_consumption(rollback_table, PRODUCT_ID, 1)
+        result = three_add_product_consumption(
+            rollback_table,
+            PRODUCT_ID,
+            1,
+            idempotency_key=new_idempotency_key("rollback"),
+        )
     except Exception as error:
         result = {
             "status": "exception",

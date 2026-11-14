@@ -32,6 +32,15 @@ def success(data, message):
     }
 
 
+def failure(error_type, data, message):
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "data": data,
+        "message": message
+    }
+
+
 INITIAL_TIME = now_seconds()
 
 INITIAL_TABLE_STATE = {
@@ -249,6 +258,42 @@ class MockHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/tables/open":
             table_id = query.get("table_id", ["2"])[0]
+            confirm_unsettled = (
+                query.get("confirm_unsettled", ["false"])[0].lower() == "true"
+            )
+
+            if TABLE_STATE.get(table_id, {}).get("is_open"):
+                empty_tables = [
+                    current_table_id
+                    for current_table_id, table in TABLE_STATE.items()
+                    if not table["is_open"]
+                ]
+                self.send_json(failure(
+                    "TableOccupied",
+                    {"空闲桌子": empty_tables},
+                    f"{table_id} 号桌已被占用，无法开台"
+                ), status=409)
+                return
+
+            if table_id == "2" and not confirm_unsettled:
+                self.send_json(failure(
+                    "TableHasUnsettledConsumptions",
+                    {
+                        "table_id": table_id,
+                        "消费明细": CHECKOUT_OPTIONS,
+                        "汇总": {
+                            "消费笔数": 2,
+                            "台费笔数": 1,
+                            "商品笔数": 1,
+                            "合计金额": "66.00",
+                            "金额完整": True
+                        },
+                        "可确认开台": True
+                    },
+                    "2 号桌还有 2 笔未结账消费，合计 ¥66.00，请先结账或确认继续开台"
+                ), status=409)
+                return
+
             if table_id in TABLE_STATE:
                 TABLE_STATE[table_id].update({
                     "is_open": True,
@@ -270,6 +315,15 @@ class MockHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/products/consumption":
+            if not self.headers.get("Idempotency-Key"):
+                self.send_json({
+                    "status": "error",
+                    "error_type": "IdempotencyKeyRequired",
+                    "data": None,
+                    "message": "缺少 Idempotency-Key 请求头"
+                }, status=422)
+                return
+
             self.send_json(success(None, "模拟操作成功"))
             return
 

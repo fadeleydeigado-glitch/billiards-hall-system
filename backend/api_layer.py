@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +22,7 @@ from .json_utils import decimal_to_json
 from .schemas import (
     ConfirmPaymentRequest,
     CreateUnpaidOrderRequest,
+    MAX_IDEMPOTENCY_KEY_LENGTH,
     ProductId,
     TableId,
 )
@@ -57,6 +58,16 @@ def frontend_page():
         FRONTEND_DIR / "index.html",
         headers={"Cache-Control": "no-store"}
     )
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "success",
+        "error_type": None,
+        "data": {"status": "ok"},
+        "message": "服务正常",
+    }
 
 
 @app.get("/preview")
@@ -108,9 +119,15 @@ def api_get_frontend_checkout_options(table_id: TableId):
 
 
 @app.post("/tables/open")
-def api_open_table(table_id: TableId):
+def api_open_table(
+    table_id: TableId,
+    confirm_unsettled: bool = Query(False),
+):
     # 对应第三层函数 three_open_table。
-    return _json_response(three_open_table(table_id))
+    return _json_response(three_open_table(
+        table_id,
+        confirm_unsettled=confirm_unsettled
+    ))
 
 
 @app.post("/tables/close")
@@ -140,8 +157,44 @@ def api_add_product_consumption(
     table_id: TableId,
     product_id: ProductId,
     product_count: Annotated[int, Query(gt=0)],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key")
+    ] = None,
 ):
     # 对应第三层函数 three_add_product_consumption。
+    # 前端每次提交必须带 Idempotency-Key；缺失或空白时在这里直接拦截。
+    if idempotency_key is None:
+        return _json_response({
+            "status": "error",
+            "error_type": "IdempotencyKeyRequired",
+            "data": None,
+            "message": "缺少 Idempotency-Key 请求头"
+        })
+
+    normalized_key = idempotency_key.strip()
+
+    if not normalized_key:
+        return _json_response({
+            "status": "error",
+            "error_type": "IdempotencyKeyRequired",
+            "data": None,
+            "message": "Idempotency-Key 不能为空"
+        })
+
+    if len(normalized_key) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        return _json_response({
+            "status": "error",
+            "error_type": "IdempotencyKeyFormatError",
+            "data": None,
+            "message": f"Idempotency-Key 长度不能超过 {MAX_IDEMPOTENCY_KEY_LENGTH}"
+        })
+
     return _json_response(
-        three_add_product_consumption(table_id, product_id, product_count)
+        three_add_product_consumption(
+            table_id,
+            product_id,
+            product_count,
+            idempotency_key=normalized_key
+        )
     )

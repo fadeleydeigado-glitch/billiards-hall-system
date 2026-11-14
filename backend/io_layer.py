@@ -1,4 +1,5 @@
 import os
+import json
 import time
 from pathlib import Path
 from decimal import Decimal
@@ -6,6 +7,9 @@ from decimal import Decimal
 import pymysql
 from dbutils.pooled_db import PooledDB
 from dotenv import load_dotenv
+
+from .json_utils import decimal_to_json
+from .observability import write_log_line
 
 
 # 在读取数据库环境变量之前加载项目根目录下的 .env 文件。
@@ -45,29 +49,42 @@ BACKUP_DB_CONFIG = {
 # blocking=True 表示池满时排队等待，而不是直接报错。
 # ping=1 表示从池里取连接时先探活；reset=True 表示归还时重置会话，
 # 避免上一位调用方未提交的事务或会话状态污染下一次使用。
-MAIN_POOL = PooledDB(
-    creator=pymysql,
-    maxconnections=10,
-    mincached=2,
-    # 让缓存上限与最大并发数一致，避免 10 并发时连接被反复关闭再重建。
-    maxcached=10,
-    blocking=True,
-    ping=1,
-    reset=True,
-    **DB_CONFIG,
-)
+_pool = None
+_backup_pool = None
+
+
+def get_pool():
+    global _pool
+    if _pool is None:
+        _pool = PooledDB(
+            creator=pymysql,
+            maxconnections=10,
+            mincached=2,
+            # 让缓存上限与最大并发数一致，避免 10 并发时连接被反复关闭再重建。
+            maxcached=10,
+            blocking=True,
+            ping=1,
+            reset=True,
+            **DB_CONFIG,
+        )
+    return _pool
+
 
 # 备份库使用独立连接池，绝不和主库共用连接。
-BACKUP_POOL = PooledDB(
-    creator=pymysql,
-    maxconnections=5,
-    mincached=1,
-    maxcached=3,
-    blocking=True,
-    ping=1,
-    reset=True,
-    **BACKUP_DB_CONFIG,
-)
+def get_backup_pool():
+    global _backup_pool
+    if _backup_pool is None:
+        _backup_pool = PooledDB(
+            creator=pymysql,
+            maxconnections=5,
+            mincached=1,
+            maxcached=3,
+            blocking=True,
+            ping=1,
+            reset=True,
+            **BACKUP_DB_CONFIG,
+        )
+    return _backup_pool
 
 
 def one_get_mysql_connection():
@@ -76,7 +93,7 @@ def one_get_mysql_connection():
     # 说明：调用方仍然用 connection.close() 归还连接；池化后 close 不会物理断开，
     #       而是把连接还回池子，归还时由 PooledDB 执行 reset。
     # 连接失败时本助手会抛出数据库异常，由调用方的 try 统一捕获并转换。
-    return MAIN_POOL.connection()
+    return get_pool().connection()
 
 
 def one_get_backup_mysql_connection():
@@ -86,7 +103,7 @@ def one_get_backup_mysql_connection():
     # - 绝不能把主库 connection / cursor 传给备份写入函数；
     # - 备份库连接必须从本助手获取，用完由调用方 close 归还到备份池；
     # - 备份库连接失败时抛异常，由 worker 捕获并让事件进入重试。
-    return BACKUP_POOL.connection()
+    return get_backup_pool().connection()
 
 
 def one_convert_mysql_error(error: Exception, action: str) -> dict:
@@ -95,6 +112,12 @@ def one_convert_mysql_error(error: Exception, action: str) -> dict:
     # 返回：四键结果字典（status="error"，error_type 为异常类型名）。
     # 说明：这里允许打印错误日志，方便排查故障。
     print(f"【MySQL 故障】{action}失败：{error}")
+    now_ns = time.time_ns()
+    now_text = (
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ns // 1_000_000_000))
+        + f".{now_ns // 1_000_000 % 1000:03d}"
+    )
+    write_log_line("error.log", f"[{now_text}] [MySQL 故障] {action}失败：{error}\n")
     return {
         "status": "error",
         "error_type": type(error).__name__,
@@ -624,12 +647,24 @@ def one_insert_ongoing_table_fee_to_mysql(cursor, table_id, consumption_id, star
             "VALUES (%s, %s, %s, %s)",
             (consumption_id, table_id, "T", start_time)
         )
-        cursor.execute(
-            "INSERT INTO ongoing_table_fees "
-            "(consumption_id, `桌台编号`, `开台时间`, `关台时间`, `每小时价格`, `金额`) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (consumption_id, table_id, start_time, None, hour_price, None)
-        )
+        try:
+            cursor.execute(
+                "INSERT INTO ongoing_table_fees "
+                "(consumption_id, `桌台编号`, `开台时间`, `关台时间`, `每小时价格`, `金额`) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (consumption_id, table_id, start_time, None, hour_price, None)
+            )
+        except pymysql.err.IntegrityError as error:
+            # 主表刚插入成功，说明消费编号本身可用；此时明细表的 1062
+            # 来自 uniq_otf_table_active，即同一桌已有未关台记录。
+            if one_is_duplicate_entry_error(error):
+                return {
+                    "status": "error",
+                    "error_type": "TableOccupied",
+                    "data": None,
+                    "message": "该桌台已处于开台状态"
+                }
+            raise
 
         table_consumption = {
             "消费记录编号": consumption_id,
@@ -1098,6 +1133,317 @@ def one_execute_in_transaction(operation_function) -> dict:
             except Exception:
                 pass
         return one_convert_mysql_error(error, "事务执行")
+
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+
+IDEMPOTENCY_STATUS_PROCESSING = "processing"
+IDEMPOTENCY_STATUS_COMPLETED = "completed"
+
+
+def one_is_duplicate_entry_error(error: Exception) -> bool:
+    # MySQL 1062 是唯一键/主键冲突。幂等表主键冲突代表同一个 Key
+    # 已经被另一个并发请求抢先写入，需要回滚后回放首次结果。
+    args = getattr(error, "args", ())
+    return bool(args) and args[0] == 1062
+
+
+def one_decode_idempotency_response(response_json) -> dict:
+    # MySQL JSON 字段通过 PyMySQL 读出时通常是字符串，兼容 bytes 和已解析字典。
+    if isinstance(response_json, (bytes, bytearray)):
+        response_json = response_json.decode("utf-8")
+
+    if isinstance(response_json, str):
+        result = json.loads(response_json)
+    elif isinstance(response_json, dict):
+        result = response_json
+    else:
+        raise ValueError("幂等记录中没有可解析的响应结果")
+
+    if not isinstance(result, dict) or "status" not in result:
+        raise ValueError("幂等记录中的响应结果不是四键结构")
+    return result
+
+
+def one_load_idempotency_record_with_cursor(cursor, idempotency_key) -> dict:
+    # 用调用方 cursor 读取防重记录；事务内、事务外都可以复用。
+    # 返回 data=None 表示没有记录；data 不为 None 时包含 operation/status/result。
+    try:
+        cursor.execute(
+            "SELECT operation, status, response_json "
+            "FROM idempotency_records WHERE idempotency_key = %s",
+            (idempotency_key,)
+        )
+        row = cursor.fetchone()
+
+        if row is None:
+            return {
+                "status": "success",
+                "error_type": None,
+                "data": None,
+                "message": "没有找到对应的幂等记录"
+            }
+
+        operation, status, response_json = row
+        result = None
+
+        if status == IDEMPOTENCY_STATUS_COMPLETED:
+            try:
+                result = one_decode_idempotency_response(response_json)
+            except (TypeError, ValueError) as error:
+                return {
+                    "status": "error",
+                    "error_type": "IdempotencyRecordCorrupted",
+                    "data": None,
+                    "message": f"幂等记录中的首次结果无法解析：{error}"
+                }
+
+        return {
+            "status": "success",
+            "error_type": None,
+            "data": {
+                "operation": operation,
+                "status": status,
+                "result": result,
+            },
+            "message": "幂等记录读取成功"
+        }
+    except Exception as error:
+        return one_convert_mysql_error(error, "读取幂等记录")
+
+
+def one_load_idempotency_record_from_mysql(idempotency_key) -> dict:
+    # 事务外预查：命中已成功记录时可以跳过后续商品/库存检查。
+    connection = None
+    try:
+        connection = one_get_mysql_connection()
+        with connection.cursor() as cursor:
+            return one_load_idempotency_record_with_cursor(
+                cursor,
+                idempotency_key
+            )
+    except Exception as error:
+        return one_convert_mysql_error(error, "读取幂等记录")
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+
+def one_result_from_idempotency_record(record: dict, operation: str) -> dict:
+    # 把防重记录转成“首次成功返回的四键结果”。
+    if record["operation"] != operation:
+        return {
+            "status": "error",
+            "error_type": "IdempotencyKeyReused",
+            "data": None,
+            "message": "该 Idempotency-Key 已被其他写操作使用"
+        }
+
+    if (
+        record["status"] != IDEMPOTENCY_STATUS_COMPLETED
+        or record["result"] is None
+    ):
+        return {
+            "status": "error",
+            "error_type": "IdempotencyInProgress",
+            "data": None,
+            "message": "该请求正在处理中，请稍后重试"
+        }
+
+    return record["result"]
+
+
+def one_get_completed_idempotency_result_from_mysql(
+    idempotency_key,
+    operation
+) -> dict:
+    # 返回 success + data=None 表示 Key 尚未成功执行过；
+    # 返回 success + data=首次结果 表示命中了已提交的防重记录。
+    record_result = one_load_idempotency_record_from_mysql(idempotency_key)
+
+    if record_result["status"] != "success":
+        return record_result
+
+    record = record_result["data"]
+    if record is None:
+        return {
+            "status": "success",
+            "error_type": None,
+            "data": None,
+            "message": "该幂等键还没有成功记录"
+        }
+
+    first_result = one_result_from_idempotency_record(record, operation)
+    if first_result["status"] != "success":
+        return first_result
+
+    return {
+        "status": "success",
+        "error_type": None,
+        "data": first_result,
+        "message": "命中首次成功结果"
+    }
+
+
+def one_get_idempotency_result_after_conflict(
+    idempotency_key,
+    operation
+) -> dict:
+    # 主键冲突时，另一个事务已经获胜。这里必须查到并返回首次结果，
+    # 不能把“查询暂时没看到”误当成没有记录继续写。
+    for _ in range(3):
+        lookup = one_get_completed_idempotency_result_from_mysql(
+            idempotency_key,
+            operation
+        )
+
+        if lookup["status"] == "error":
+            return lookup
+        if lookup["data"] is not None:
+            return lookup["data"]
+
+        time.sleep(0.02)
+
+    return {
+        "status": "error",
+        "error_type": "IdempotencyWriteFailed",
+        "data": None,
+        "message": "幂等键发生并发冲突，但未查到首次成功结果"
+    }
+
+
+def one_serialize_idempotency_result(result: dict) -> str:
+    # 防重表存的是 HTTP 边界的 JSON 结果，金额统一转成字符串，
+    # 第一次响应和重试响应在 JSON 上完全一致。
+    return json.dumps(
+        decimal_to_json(result),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":")
+    )
+
+
+def one_execute_in_transaction_with_idempotency(
+    operation_function,
+    idempotency_key,
+    operation
+) -> dict:
+    # 作用：在同一个 MySQL 事务里完成“幂等占位 + 业务写入 + 结果落库”。
+    #
+    # 流程：
+    # 1. 进事务先查防重表；已完成则直接返回第一次结果；
+    # 2. 没有记录时先插入 processing 占位，主键唯一约束充当并发锁；
+    # 3. 执行调用方传入的写操作；
+    # 4. 写成功后把完整四键结果写入防重表并提交；
+    # 5. 若并发请求撞到主键，回滚后查询首次结果返回。
+    connection = None
+
+    try:
+        connection = one_get_mysql_connection()
+        connection.begin()
+        cursor = connection.cursor()
+
+        record_result = one_load_idempotency_record_with_cursor(
+            cursor,
+            idempotency_key
+        )
+        if record_result["status"] != "success":
+            connection.rollback()
+            return record_result
+
+        record = record_result["data"]
+        if record is not None:
+            first_result = one_result_from_idempotency_record(record, operation)
+            connection.rollback()
+            return first_result
+
+        now = one_get_current_time()
+
+        try:
+            cursor.execute(
+                "INSERT INTO idempotency_records "
+                "(idempotency_key, operation, status, response_json, created_at) "
+                "VALUES (%s, %s, %s, NULL, %s)",
+                (
+                    idempotency_key,
+                    operation,
+                    IDEMPOTENCY_STATUS_PROCESSING,
+                    now
+                )
+            )
+        except Exception as error:
+            connection.rollback()
+            if one_is_duplicate_entry_error(error):
+                return one_get_idempotency_result_after_conflict(
+                    idempotency_key,
+                    operation
+                )
+            return one_convert_mysql_error(error, "写入幂等占位")
+
+        result = operation_function(cursor)
+
+        if result.get("status") != "success":
+            connection.rollback()
+            return result
+
+        try:
+            response_text = one_serialize_idempotency_result(result)
+        except (TypeError, ValueError) as error:
+            connection.rollback()
+            return {
+                "status": "error",
+                "error_type": "IdempotencyWriteFailed",
+                "data": None,
+                "message": f"首次成功结果无法写入幂等表：{error}"
+            }
+
+        cursor.execute(
+            "UPDATE idempotency_records "
+            "SET status = %s, response_json = %s, completed_at = %s "
+            "WHERE idempotency_key = %s AND status = %s",
+            (
+                IDEMPOTENCY_STATUS_COMPLETED,
+                response_text,
+                one_get_current_time(),
+                idempotency_key,
+                IDEMPOTENCY_STATUS_PROCESSING
+            )
+        )
+
+        if cursor.rowcount != 1:
+            connection.rollback()
+            return {
+                "status": "error",
+                "error_type": "IdempotencyWriteFailed",
+                "data": None,
+                "message": "幂等占位更新失败，事务已回滚"
+            }
+
+        connection.commit()
+        return result
+
+    except Exception as error:
+        if connection is not None:
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+
+        if one_is_duplicate_entry_error(error):
+            return one_get_idempotency_result_after_conflict(
+                idempotency_key,
+                operation
+            )
+
+        return one_convert_mysql_error(error, "幂等事务执行")
 
     finally:
         if connection is not None:

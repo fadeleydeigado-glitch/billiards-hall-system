@@ -37,6 +37,7 @@ class ErrorStatusTests(unittest.TestCase):
     def test_state_conflicts_are_409(self):
         for error_type in (
             "TableOccupied",
+            "TableHasUnsettledConsumptions",
             "OrderNotUnpaid",
             "ProductStockNotEnough",
             "TableFeeAlreadyClosed",

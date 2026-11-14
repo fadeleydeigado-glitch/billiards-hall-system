@@ -10,7 +10,11 @@ import {
     formatMoney,
     formatRate
 } from "../js/format.js";
-import { requestJson } from "../js/api.js";
+import { addProduct, openTable, requestJson } from "../js/api.js";
+import {
+    createIdempotencyKey,
+    createIdempotencyKeyStore
+} from "../js/idempotency.js";
 
 test("elapsedSeconds derives a non-negative integer duration", () => {
     assert.equal(elapsedSeconds(1000, 1060), 60);
@@ -97,6 +101,121 @@ test("requestJson keeps the backend error payload on non-2xx responses", async (
         assert.equal(payload.status, "error");
         assert.equal(payload.error_type, "TableOccupied");
         assert.equal(payload.message, "3 号桌正在使用中");
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("openTable sends confirm_unsettled only on confirmed retry", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+
+    globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        return new Response(JSON.stringify({
+            status: "success",
+            error_type: null,
+            data: null,
+            message: "开台成功"
+        }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+        });
+    };
+
+    try {
+        await openTable("3");
+        await openTable("3", { confirmUnsettled: true });
+
+        assert.equal(calls[0].url, "/tables/open?table_id=3");
+        assert.equal(calls[0].options.method, "POST");
+        assert.equal(
+            calls[1].url,
+            "/tables/open?table_id=3&confirm_unsettled=true"
+        );
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("open table warning panel is wired into the dialog", async () => {
+    const appSource = await readFile(
+        new URL("../app.js", import.meta.url),
+        "utf8"
+    );
+    const indexSource = await readFile(
+        new URL("../index.html", import.meta.url),
+        "utf8"
+    );
+
+    assert.equal(appSource.includes("TableHasUnsettledConsumptions"), true);
+    assert.equal(appSource.includes("confirmOpenWithUnsettled"), true);
+    assert.equal(indexSource.includes('v-if="openWarning.visible"'), true);
+    assert.equal(indexSource.includes("@click=\"confirmOpenWithUnsettled\""), true);
+});
+
+test("idempotency keys are UUID-shaped and reused until cleared", () => {
+    assert.match(
+        createIdempotencyKey(),
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+
+    let generated = 0;
+    const store = createIdempotencyKeyStore(() => `key-${++generated}`);
+
+    assert.equal(store.getOrCreate(), "key-1");
+    assert.equal(store.getOrCreate(), "key-1");
+    assert.equal(store.peek(), "key-1");
+
+    store.clear();
+    assert.equal(store.getOrCreate(), "key-2");
+});
+
+test("addProduct sends the idempotency key in the request header", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+
+    globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        return new Response(JSON.stringify({
+            status: "success",
+            error_type: null,
+            data: null,
+            message: "添加成功"
+        }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+        });
+    };
+
+    try {
+        const result = await addProduct("1", "P_001", 2, "fixed-key");
+
+        assert.equal(result.status, "success");
+        assert.equal(
+            calls[0].options.headers["Idempotency-Key"],
+            "fixed-key"
+        );
+        assert.match(calls[0].url, /product_count=2/);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("addProduct refuses to submit without an idempotency key", async () => {
+    const originalFetch = globalThis.fetch;
+    let called = false;
+    globalThis.fetch = async () => {
+        called = true;
+        throw new Error("should not be called");
+    };
+
+    try {
+        const result = await addProduct("1", "P_001", 1, "");
+
+        assert.equal(result.status, "error");
+        assert.equal(result.error_type, "IdempotencyKeyMissing");
+        assert.equal(called, false);
     } finally {
         globalThis.fetch = originalFetch;
     }

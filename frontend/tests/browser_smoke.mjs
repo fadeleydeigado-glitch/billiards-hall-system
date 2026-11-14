@@ -206,6 +206,32 @@ async function main() {
             "document.querySelector('form[data-action=\"open-table\"] button[type=\"submit\"]').click(); true"
         );
         await waitFor(
+            "Boolean(document.querySelector('.open-warning-panel'))",
+            "Open-table warning panel did not render"
+        );
+        const openWarningText = await evaluate(
+            "document.querySelector('.open-warning-panel').textContent"
+        );
+        assert.equal(openWarningText.includes("检测到未结账消费"), true);
+        assert.equal(openWarningText.includes("2 笔"), true);
+        assert.equal(openWarningText.includes("¥66"), true);
+        assert.equal(
+            (await evaluate(
+                "document.querySelector('.open-warning-panel .button-quiet').textContent.trim()"
+            )),
+            "去结账"
+        );
+        assert.equal(
+            (await evaluate(
+                "document.querySelector('.open-warning-panel .button-primary').textContent.trim()"
+            )),
+            "仍然开台"
+        );
+        console.log("✔ open-table warning shows pending items before confirmation");
+        await evaluate(
+            "document.querySelector('.open-warning-panel .button-primary').click(); true"
+        );
+        await waitFor(
             "document.querySelector('[data-table-id=\"2\"]')?.dataset.status === 'open'",
             "Opening a table did not reactively refresh its card"
         );
@@ -343,8 +369,17 @@ async function main() {
         );
         console.log("✔ desktop and mobile layouts fit their viewports");
 
-        assert.deepEqual(cdp.exceptions, [], "Browser reported runtime errors");
-        console.log("✔ no browser runtime errors");
+        // 开台提醒会按设计返回 409，Chrome 会把这次 HTTP 状态记录成
+        // "Failed to load resource"。除此之外不应该有运行时异常。
+        const unexpectedExceptions = cdp.exceptions.filter(
+            (message) => !message.includes("409 (Conflict)")
+        );
+        assert.deepEqual(
+            unexpectedExceptions,
+            [],
+            "Browser reported unexpected runtime errors"
+        );
+        console.log("✔ no unexpected browser runtime errors");
     } finally {
         if (webSocket) {
             webSocket.close();

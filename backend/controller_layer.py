@@ -30,6 +30,8 @@ from .io_layer import (
     one_load_product_by_id_from_mysql,
     one_insert_ongoing_product_consumption_to_mysql,
     one_deduct_product_stock_in_mysql,
+    one_get_completed_idempotency_result_from_mysql,
+    one_execute_in_transaction_with_idempotency,
 
     # 业务日志函数。
     one_write_business_log
@@ -53,6 +55,7 @@ from .business_layer import (
 
     # 创建未支付订单与清扫消费流程。
     two_get_frontend_checkout_options,
+    two_get_unsettled_consumption_summary,
     two_check_selected_consumptions,
     two_check_selected_consumptions_not_in_unpaid_orders,
     two_create_unpaid_bill,
@@ -76,6 +79,32 @@ from .outbox import (
     build_table_fee_event_payload,
     one_insert_outbox_event,
 )
+
+from .schemas import MAX_IDEMPOTENCY_KEY_LENGTH
+
+
+IDEMPOTENCY_OPERATION_ADD_PRODUCT = "add_product_consumption"
+
+
+def check_table_exists(table_no) -> bool:
+    # 最普通的桌号检查：查 billiards_tables，存在返回 True，不存在返回 False。
+    # 数据库读取失败时抛 RuntimeError，避免把“数据库故障”误判成“桌子不存在”。
+    tables_result = one_load_billiards_tables_from_mysql()
+
+    if tables_result["status"] != "success":
+        raise RuntimeError(tables_result["message"])
+
+    return str(table_no) in tables_result["data"]
+
+
+def build_table_not_found_result(table_no) -> dict:
+    # 统一的“桌子不存在”返回结构，HTTP 层会映射成 404。
+    return {
+        "status": "error",
+        "error_type": "TableNotFound",
+        "data": None,
+        "message": f"桌台配置表中找不到 {table_no} 号桌"
+    }
 
 
 def three_get_frontend_products_data() -> dict:
@@ -154,6 +183,10 @@ def three_get_frontend_checkout_options(table_id: str) -> dict:
     #
     # 本函数只读取和整理当前桌子的真实待结算消费，
     # 不创建订单、不清扫消费，也不保存任何前端刷新结果。
+
+    # 第一行先确认桌号真实存在，不存在直接按 404 返回。
+    if not check_table_exists(table_id):
+        return build_table_not_found_result(table_id)
 
     # ==================== 入参检查 ====================
 
@@ -300,7 +333,12 @@ def three_get_frontend_refresh_data() -> dict:
     }
 
 
-def three_open_table(table_id: str, source: str = "人") -> dict:
+def three_open_table(
+    table_id: str,
+    source: str = "人",
+    *,
+    confirm_unsettled: bool = False
+) -> dict:
     # source 是日志用的来源标记，默认 "人"，AI 调用时显式传 "AI"。
     # 外面三行统一收口：调内部 + 写业务日志 + 返回结果。
 
@@ -315,6 +353,10 @@ def three_open_table(table_id: str, source: str = "人") -> dict:
         # 5. 用事务写入台位消费，成功后返回开台成功。
         #
         # 入口检查由本函数负责，其余由第二层负责。
+
+        # 第一行先确认桌号真实存在，不存在直接按 404 返回。
+        if not check_table_exists(table_id):
+            return build_table_not_found_result(table_id)
 
         # ==================== 入参检查 ====================
 
@@ -473,7 +515,32 @@ def three_open_table(table_id: str, source: str = "人") -> dict:
                     "message": f"{table_id} 号桌已被占用，无法开台"
                 }
 
-            # 8.6 插入台位费（主表 1 行 + 明细表 1 行）。
+            # 8.6 检查该桌是否还有未结账消费。
+            #
+            # 此时已经确认该桌没有未关台的台位费，但可能还有：
+            # - 上一轮已经关台、尚未建单的台费；
+            # - 尚未建单的商品消费。
+            # 直接开台会把上一轮消费和新台费混在一起，所以先返回
+            # 可确认的提醒；确认后由前端带 confirm_unsettled=true 重试。
+            pending_consumptions = table_consumption_box["待结算消费"]
+
+            if pending_consumptions and not confirm_unsettled:
+                summary_result = two_get_unsettled_consumption_summary(
+                    table_consumption_box,
+                    table_id
+                )
+
+                if summary_result["status"] != "success":
+                    return summary_result
+
+                return {
+                    "status": "error",
+                    "error_type": "TableHasUnsettledConsumptions",
+                    "data": summary_result["data"],
+                    "message": summary_result["message"]
+                }
+
+            # 8.7 插入台位费（主表 1 行 + 明细表 1 行）。
             insert_result = one_insert_ongoing_table_fee_to_mysql(
                 cursor,
                 flow_box["桌子号码"],
@@ -499,7 +566,10 @@ def three_open_table(table_id: str, source: str = "人") -> dict:
         }
 
     result = 开台_内部(table_id)
-    one_write_business_log(source, "开台", f"桌号={table_id}", result)
+    log_params = f"桌号={table_id}"
+    if confirm_unsettled:
+        log_params += "，确认未结账消费=是"
+    one_write_business_log(source, "开台", log_params, result)
     return result
 
 def three_close_table(table_id: str, source: str = "人") -> dict:
@@ -517,6 +587,10 @@ def three_close_table(table_id: str, source: str = "人") -> dict:
         #
         # 入口检查由本函数负责，其余由第二层负责。
         # 关台使用原有消费记录，不生成新的消费记录编号。
+
+        # 第一行先确认桌号真实存在，不存在直接按 404 返回。
+        if not check_table_exists(table_id):
+            return build_table_not_found_result(table_id)
 
         # ==================== 入参检查 ====================
 
@@ -707,6 +781,10 @@ def three_create_unpaid_order(selected_data: dict, source: str = "人") -> dict:
         table_id = selected_data["桌子号码"]
         consumption_id_list = selected_data["消费记录编号列表"]
 
+        # 桌号一旦取到，先确认它真实存在，不存在直接按 404 返回。
+        if not check_table_exists(table_id):
+            return build_table_not_found_result(table_id)
+
         # 桌子号码必须是非空字符串。
         if not isinstance(table_id, str) or not table_id.strip():
             return {
@@ -842,8 +920,15 @@ def three_create_unpaid_order(selected_data: dict, source: str = "人") -> dict:
             if insert_order_result["status"] != "success":
                 return insert_order_result
 
+            # 统一按消费编号升序处理，保证所有并发请求以相同顺序加锁，
+            # 避免 A/B 与 B/A 的相反删除顺序形成 ABBA 死锁。
+            selected_consumptions_for_write = sorted(
+                order_data["已选消费"],
+                key=lambda consumption: consumption["消费记录编号"]
+            )
+
             # 9.2 遍历已选消费，按类型插明细
-            for consumption in order_data["已选消费"]:
+            for consumption in selected_consumptions_for_write:
 
                 consumption_id = consumption["消费记录编号"]
                 consumption_type = consumption["类型"]
@@ -888,7 +973,7 @@ def three_create_unpaid_order(selected_data: dict, source: str = "人") -> dict:
                     }
 
             # 9.3 遍历已选消费，逐条删待结算消费
-            for consumption in order_data["已选消费"]:
+            for consumption in selected_consumptions_for_write:
 
                 consumption_id = consumption["消费记录编号"]
 
@@ -1040,7 +1125,14 @@ def three_confirm_payment(payment_data: dict, source: str = "人") -> dict:
     one_write_business_log(source, "确认收款", params, result)
     return result
 
-def three_add_product_consumption(table_id: str,product_id: str,product_count: int, source: str = "人") -> dict:
+def three_add_product_consumption(
+    table_id: str,
+    product_id: str,
+    product_count: int,
+    idempotency_key: str | None = None,
+    *,
+    source: str = "人"
+) -> dict:
     # source 是日志用的来源标记，默认 "人"，AI 调用时显式传 "AI"。
     # 外面三行统一收口：调内部 + 写业务日志 + 返回结果。
 
@@ -1053,14 +1145,63 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
         # 3. 检查购买数量和库存。
         # 4. 读单桌待结算消费，确认商品消费有一个可挂载的桌号。
         # 5. 组装商品消费记录。
-        # 6. 用事务写入：插商品消费 + 扣商品库存。
+        # 6. 用事务写入：幂等占位 + 插商品消费 + 扣库存 + 写 outbox + 存结果。
         #
-        # 第 6 步的两项写入在同一个事务里完成：
+        # 第 6 步的所有写操作在同一个事务里完成：
         # 任何一步失败，整个事务回滚，数据库保持原样。
-        # 不再需要手动备份和回滚 Ongoing_order.json。
         #
         # 商品消费不要求桌子当前处于开台状态。
         # 只要桌子真实存在，就可以产生商品消费。
+
+        # 第一行先确认桌号真实存在，不存在直接按 404 返回。
+        if not check_table_exists(table_id):
+            return build_table_not_found_result(table_id)
+
+        # 桌号通过后立刻校验并读取幂等键。
+        # 同一 Key 已经成功过时，直接返回第一次结果，不再读商品、不再查库存。
+        if idempotency_key is None:
+            return {
+                "status": "error",
+                "error_type": "IdempotencyKeyRequired",
+                "data": None,
+                "message": "缺少 Idempotency-Key 请求头"
+            }
+
+        if not isinstance(idempotency_key, str):
+            return {
+                "status": "error",
+                "error_type": "IdempotencyKeyFormatError",
+                "data": None,
+                "message": "Idempotency-Key 必须是字符串"
+            }
+
+        normalized_key = idempotency_key.strip()
+        if not normalized_key:
+            return {
+                "status": "error",
+                "error_type": "IdempotencyKeyRequired",
+                "data": None,
+                "message": "Idempotency-Key 不能为空"
+            }
+
+        if len(normalized_key) > MAX_IDEMPOTENCY_KEY_LENGTH:
+            return {
+                "status": "error",
+                "error_type": "IdempotencyKeyFormatError",
+                "data": None,
+                "message": f"Idempotency-Key 长度不能超过 {MAX_IDEMPOTENCY_KEY_LENGTH}"
+            }
+
+        replay_result = one_get_completed_idempotency_result_from_mysql(
+            normalized_key,
+            IDEMPOTENCY_OPERATION_ADD_PRODUCT
+        )
+
+        if replay_result["status"] != "success":
+            return replay_result
+
+        if replay_result["data"] is not None:
+            return replay_result["data"]
 
         # ==================== 入参检查 ====================
 
@@ -1195,15 +1336,16 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
         backup_record = backup_payload_result["data"]
         backup_event_payload = build_product_event_payload(backup_record)
 
-        # ==================== 第十步：事务里写入商品消费 + 扣库存 + 写 outbox ====================
+        # ==================== 第十步：事务里幂等占位 + 写消费 + 扣库存 + 写 outbox ====================
 
-        # 事务内依次完成：插商品消费、扣商品库存、写 outbox 待办事件。
+        # 事务内依次完成：查/占位幂等键、插商品消费、扣商品库存、
+        # 写 outbox 待办事件、保存首次成功结果。
         # 任何一步失败，整个事务回滚，数据库保持原样。
         def add_product_operation(cursor):
 
             consumption = product_consumption_data
 
-            # 9.1 插商品消费
+            # 10.1 插商品消费
             insert_result = one_insert_ongoing_product_consumption_to_mysql(
                 cursor,
                 consumption["桌子号码"],
@@ -1219,7 +1361,7 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
             if insert_result["status"] != "success":
                 return insert_result
 
-            # 9.2 扣库存
+            # 10.2 扣库存
             stock_result = one_deduct_product_stock_in_mysql(
                 cursor,
                 consumption["商品编号"],
@@ -1229,7 +1371,7 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
             if stock_result["status"] != "success":
                 return stock_result
 
-            # 9.3 写 outbox 待办事件
+            # 10.3 写 outbox 待办事件
             outbox_result = one_insert_outbox_event(
                 cursor,
                 EVENT_CORE_BACKUP_PRODUCT,
@@ -1244,23 +1386,41 @@ def three_add_product_consumption(table_id: str,product_id: str,product_count: i
                 "status": "success",
                 "error_type": None,
                 "data": consumption,
-                "message": f"{table_id} 号桌商品消费已写入，库存已扣减，备份已入队"
+                "message": f"{table_id} 号桌商品消费添加成功，核心备份已加入异步队列"
             }
 
-        transaction_result = one_execute_in_transaction(add_product_operation)
+        transaction_result = one_execute_in_transaction_with_idempotency(
+            add_product_operation,
+            normalized_key,
+            IDEMPOTENCY_OPERATION_ADD_PRODUCT
+        )
 
         if transaction_result["status"] != "success":
             return transaction_result
 
-        # ==================== 第十一步：返回成功 ====================
+        # ==================== 第十一步：返回首次成功结果 ====================
 
-        return {
-            "status": "success",
-            "error_type": None,
-            "data": transaction_result["data"],
-            "message": f"{table_id} 号桌商品消费添加成功，核心备份已加入异步队列"
-        }
+        return transaction_result
 
     result = 加商品_内部(table_id, product_id, product_count)
+
+    # 并发窗口兜底：预查时首次请求可能还没提交，随后业务检查失败。
+    # 如果此刻防重表里已经出现同一 Key 的成功结果，仍按幂等语义返回首次结果。
+    if (
+        result.get("status") != "success"
+        and isinstance(idempotency_key, str)
+        and idempotency_key.strip()
+    ):
+        replay_result = one_get_completed_idempotency_result_from_mysql(
+            idempotency_key.strip(),
+            IDEMPOTENCY_OPERATION_ADD_PRODUCT
+        )
+
+        if (
+            replay_result["status"] == "success"
+            and replay_result["data"] is not None
+        ):
+            result = replay_result["data"]
+
     one_write_business_log(source, "加商品", f"桌号={table_id}, 商品={product_id}, 数量={product_count}", result)
     return result

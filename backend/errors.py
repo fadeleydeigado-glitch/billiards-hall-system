@@ -31,12 +31,15 @@ ERROR_STATUS = {
 
     # 409：资源存在，但当前状态不允许这个操作。
     "TableOccupied": 409,
+    "TableHasUnsettledConsumptions": 409,
     "TableNotClosed": 409,
     "TableFeeAlreadyClosed": 409,
     "OrderNotUnpaid": 409,
     "ProductStockNotEnough": 409,
     "ConsumptionAlreadyInUnpaidOrder": 409,
     "SelectedConsumptionAmountNotReady": 409,
+    "IdempotencyKeyReused": 409,
+    "IdempotencyInProgress": 409,
 
     # 422：请求形状错误；Pydantic 已挡住大部分，controller 仍保留兜底检查。
     "TableIdFormatError": 422,
@@ -54,6 +57,8 @@ ERROR_STATUS = {
     "ProductIdFormatError": 422,
     "ProductCountInvalid": 422,
     "ProductCountFormatError": 422,
+    "IdempotencyKeyRequired": 422,
+    "IdempotencyKeyFormatError": 422,
 
     # 500 条目显式列出，方便排查服务端问题；未列出的 error_type 也默认 500。
     "TableFeeIdFormatError": 500,
@@ -65,6 +70,8 @@ ERROR_STATUS = {
     "SelectedConsumptionAmountFormatError": 500,
     "TableFeeEndTimeMissing": 500,
     "UnknownConsumptionType": 500,
+    "IdempotencyRecordCorrupted": 500,
+    "IdempotencyWriteFailed": 500,
 }
 
 

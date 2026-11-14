@@ -81,7 +81,7 @@
 
 ## 关键设计
 
-### 1. 开台：行锁 + 事务内二次检查
+### 1. 开台：行锁 + 事务内二次检查 + 数据库唯一约束
 
 开台不是简单插入一条记录。事务外先读取桌台和待结算消费，进入事务后：
 
@@ -91,7 +91,15 @@
 4. 才写入台位费主表和明细表。
 
 这样后到的请求会等待行锁，并在拿到锁后看到最新状态，避免两个前台同时
-开同一张桌。
+开同一张桌。`ongoing_table_fees.active_marker` 是数据库生成列：未关台时为
+`1`，关台后为 `NULL`；`UNIQUE(桌台编号, active_marker)` 再从存储层保证
+同一桌最多只有一条未关台记录。应用捕获 MySQL `1062` 后返回 `409` 和
+“该桌台已处于开台状态”。
+
+如果桌台已经没有未关台的台位费，但还有已关台未结账的台费或商品消费，
+开台会先返回 `409 TableHasUnsettledConsumptions`，`data` 中带
+`消费明细` 和 `汇总`。前端确认后带 `confirm_unsettled=true` 重试，避免
+上一轮消费和新一轮台费混在同一张结账单里。
 
 ### 2. 关台、收款、库存：条件更新
 
@@ -157,7 +165,23 @@ S_<桌号>_t<毫秒时间戳的36进制>_<6位36进制随机>
 `订单编号` 只作为不透明唯一标识使用；前端展示需要的桌号和创建时间从
 `orders` 表的字段读取，不再从编号字符串里反解析。
 
-### 6. 核心备份：事务性 outbox + 独立 worker
+### 6. 加商品：Idempotency-Key + 事务防重
+
+`POST /products/consumption` 必须携带 `Idempotency-Key` 请求头。前端在准备
+提交时生成 UUID；请求失败重试继续使用同一个 Key，收到成功响应后才清空。
+
+数据库用 `idempotency_records.idempotency_key` 主键作为并发闸门：
+
+1. 事务开始先查防重表，已成功过就直接回放首次结果；
+2. 没有记录时先插入 `processing` 占位，主键唯一约束会挡住并发双击；
+3. 同一个事务内完成插商品消费、扣库存、写 outbox、保存首次成功结果；
+4. 后到事务收到 MySQL `1062 Duplicate entry` 时整体回滚，再查询并返回
+   首次成功结果。
+
+`response_json` 保存完整四键结果，金额在入库前转成字符串，因此重试响应与
+第一次 HTTP JSON 响应内容一致。
+
+### 7. 核心备份：事务性 outbox + 独立 worker
 
 核心备份不直接在业务事务里写第二个数据库，而是使用 outbox：
 
@@ -188,7 +212,7 @@ outbox_worker
 outbox 只用于核心备份，不用于业务日志。业务日志仍然同步写入
 `logs/business.log`，写失败只提示，不阻断主流程。
 
-### 7. 测试与数据检查
+### 8. 测试与数据检查
 
 项目包含三类验证：
 
@@ -216,7 +240,7 @@ backend/
   json_utils.py           Decimal 的 JSON 出口转换
 
 database/
-  schema.sql              主库建表（10 张业务表 + outbox_events）
+  schema.sql              主库建表（10 张业务表 + outbox_events + idempotency_records）
   backup_schema.sql       独立备份库建表（2 张表）
   migrations/             已有库的增量迁移 SQL
 
@@ -295,6 +319,8 @@ Get-Content database/backup_schema.sql -Raw | mysql -u root -p
 ```powershell
 Get-Content database/migrations/2026-11-07_add_outbox_events.sql -Raw | mysql -u root -p
 Get-Content database/migrations/2026-11-07_create_billiards_backup.sql -Raw | mysql -u root -p
+Get-Content database/migrations/2026-11-15_add_idempotency_records.sql -Raw | mysql -u root -p
+Get-Content database/migrations/2026-11-15_add_ongoing_table_active_unique.sql -Raw | mysql -u root -p
 python scripts/migrate_backups_to_backup_db.py
 python scripts/migrate_backups_to_backup_db.py --apply
 ```
@@ -336,11 +362,11 @@ python -m backend.outbox_worker --once
 | GET | `/frontend/products` | 商品列表 |
 | GET | `/frontend/unpaid-orders` | 未支付订单 |
 | GET | `/tables/checkout-options?table_id=1` | 单桌结账明细 |
-| POST | `/tables/open?table_id=1` | 开台 |
+| POST | `/tables/open?table_id=1[&confirm_unsettled=true]` | 开台；有待结算消费时先返回 409，确认后重试 |
 | POST | `/tables/close?table_id=1` | 关台 |
 | POST | `/orders/unpaid` | 创建未支付订单 |
 | POST | `/payments/confirm` | 确认收款 |
-| POST | `/products/consumption` | 加商品消费 |
+| POST | `/products/consumption` | 加商品消费，必须带 `Idempotency-Key` 请求头 |
 
 请求体和查询参数由 Pydantic 模型与 FastAPI `Query` 约束校验；校验失败返回 HTTP 422
 （JSON 语法错误返回 400），响应仍是四键结构。业务错误按 `error_type`
@@ -352,7 +378,7 @@ python -m backend.outbox_worker --once
 | 请求体不是合法 JSON | 400 |
 | 字段缺失、类型错误、数量小于等于 0 | 422 |
 | 桌台、商品、订单或消费记录不存在 | 404 |
-| 桌已占、订单已付、库存不足、重复关台 | 409 |
+| 桌已占、有待结算消费、订单已付、库存不足、重复关台 | 409 |
 | 数据库异常或其他服务端错误 | 500 |
 
 Pydantic 只检查请求形状和字段边界；桌台是否空闲、库存是否足够、订单
@@ -364,7 +390,7 @@ Pydantic 只检查请求形状和字段边界；桌台是否空闲、库存是�
 
 ```powershell
 python -m compileall -q backend tests scripts
-python -m unittest tests.test_api_errors tests.test_request_schemas tests.test_id_utils tests.test_decimal_money tests.test_product_backup
+python -m unittest tests.test_api_errors tests.test_request_schemas tests.test_id_utils tests.test_decimal_money tests.test_product_backup tests.test_table_exists_check tests.test_idempotency tests.test_open_table_unique
 
 cd frontend
 node --check app.js
@@ -378,6 +404,28 @@ node --test tests/frontend.test.mjs
 
 ```powershell
 python tests/test_mysql_write.py
+```
+
+### 加商品幂等真实库测试
+
+该脚本会并发提交同一个 `Idempotency-Key`，验证只扣一次库存、只生成一条
+消费记录，并在结束后清理测试数据：
+
+```powershell
+$env:MYSQL_DATABASE = "billiards_hall_test"
+$env:ALLOW_WRITE_TESTS = "1"
+python tests/test_idempotency_mysql.py
+```
+
+### 开台唯一约束真实库测试
+
+该脚本在事务中验证同一桌第二条未关台记录会被数据库唯一索引拦截，
+关台后可以再次开台，最后统一回滚：
+
+```powershell
+$env:MYSQL_DATABASE = "billiards_hall_test"
+$env:ALLOW_WRITE_TESTS = "1"
+python tests/test_open_table_unique_mysql.py
 ```
 
 ### 完整流程测试

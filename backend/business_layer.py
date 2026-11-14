@@ -773,6 +773,73 @@ def two_get_frontend_checkout_options(
     }
 
 
+def two_get_unsettled_consumption_summary(
+    table_consumption_box: dict,
+    table_id: str
+) -> dict:
+    # 汇总开台前检测到的待结算消费。
+    #
+    # 这里直接复用结账明细的字段，前端可以用同一套模板展示
+    # “消费明细”和“汇总”，不需要再维护另一份消费数据结构。
+
+    checkout_options_result = two_get_frontend_checkout_options(
+        table_consumption_box,
+        table_id
+    )
+
+    if checkout_options_result["status"] != "success":
+        return checkout_options_result
+
+    checkout_options = checkout_options_result["data"]["消费明细"]
+    table_fee_count = 0
+    product_count = 0
+    total_amount = Decimal("0")
+    amount_complete = True
+
+    for option in checkout_options:
+        consumption_type = option["consumption_type"]
+
+        if consumption_type == "台位费":
+            table_fee_count += 1
+        elif consumption_type == "商品":
+            product_count += 1
+
+        amount = _as_decimal_amount(option.get("amount"))
+        if amount is None:
+            amount_complete = False
+        else:
+            total_amount += amount
+
+    summary_total = total_amount if amount_complete else None
+    total_text = (
+        "金额待确定"
+        if summary_total is None
+        else f"¥{format(summary_total, 'f')}"
+    )
+    consumption_count = len(checkout_options)
+
+    return {
+        "status": "success",
+        "error_type": None,
+        "data": {
+            "table_id": str(table_id),
+            "消费明细": checkout_options,
+            "汇总": {
+                "消费笔数": consumption_count,
+                "台费笔数": table_fee_count,
+                "商品笔数": product_count,
+                "合计金额": summary_total,
+                "金额完整": amount_complete
+            },
+            "可确认开台": True
+        },
+        "message": (
+            f"{table_id} 号桌还有 {consumption_count} 笔未结账消费，"
+            f"合计 {total_text}，请先结账或确认继续开台"
+        )
+    }
+
+
 def two_get_empty_billiards_tables(table_consumption_boxes: dict) -> dict:
     # 获取当前可以开台的桌子
     #

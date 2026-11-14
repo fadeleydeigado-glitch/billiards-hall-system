@@ -59,8 +59,14 @@ export function getCheckoutOptions(tableId) {
     return requestJson(`/tables/checkout-options?${params}`);
 }
 
-export function openTable(tableId) {
-    const params = queryString({ table_id: tableId });
+export function openTable(tableId, options = {}) {
+    const values = { table_id: tableId };
+
+    if (options.confirmUnsettled === true) {
+        values.confirm_unsettled = "true";
+    }
+
+    const params = queryString(values);
     return requestJson(`/tables/open?${params}`, { method: "POST" });
 }
 
@@ -69,13 +75,23 @@ export function closeTable(tableId) {
     return requestJson(`/tables/close?${params}`, { method: "POST" });
 }
 
-export function addProduct(tableId, productId, productCount) {
+export function addProduct(tableId, productId, productCount, idempotencyKey) {
+    if (!idempotencyKey) {
+        return Promise.resolve(buildError(
+            "IdempotencyKeyMissing",
+            "缺少 Idempotency-Key，已取消提交"
+        ));
+    }
+
     const params = queryString({
         table_id: tableId,
         product_id: productId,
         product_count: productCount
     });
-    return requestJson(`/products/consumption?${params}`, { method: "POST" });
+    return requestJson(`/products/consumption?${params}`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey }
+    });
 }
 
 export function createUnpaidOrder(tableId, consumptionIds) {

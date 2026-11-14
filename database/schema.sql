@@ -2,7 +2,7 @@
 -- 台球厅管理系统 — JSON → MySQL 数据库建表语句
 -- MySQL 版本: 8.4
 -- 数据库名: billiards_hall
--- 说明: 本文件包含所有 11 张表的 CREATE TABLE 语句
+-- 说明: 本文件包含所有 12 张表的 CREATE TABLE 语句
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS billiards_hall
@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS ongoing_consumptions (
     创建时间    BIGINT         NOT NULL COMMENT '消费创建时间戳',
     INDEX idx_ongoing_table (桌台编号),
     INDEX idx_ongoing_type (type_code),
-    CONSTRAINT fk_ongoing_type FOREIGN KEY (type_code) REFERENCES consumption_types(type_code)
+    CONSTRAINT fk_ongoing_type FOREIGN KEY (type_code) REFERENCES consumption_types(type_code),
+    CONSTRAINT fk_ongoing_table FOREIGN KEY (桌台编号) REFERENCES billiards_tables(id)
 ) COMMENT '待结算消费主表';
 
 -- 5. 待结算台位费明细表
@@ -62,7 +63,13 @@ CREATE TABLE IF NOT EXISTS ongoing_table_fees (
     关台时间        BIGINT         NULL     COMMENT '关台时间戳,NULL表示尚未关台',
     每小时价格      DECIMAL(10,2)  NOT NULL COMMENT '每小时价格',
     金额            DECIMAL(10,2)  NULL     COMMENT '台位费金额,NULL表示尚未计算',
+    -- 未关台时为 1，关台后为 NULL。MySQL 唯一索引允许多个 NULL，
+    -- 因此已关台的历史记录不互相冲突，同一桌最多只能有一条未关台记录。
+    active_marker   TINYINT GENERATED ALWAYS AS (
+        CASE WHEN `关台时间` IS NULL THEN 1 ELSE NULL END
+    ) VIRTUAL COMMENT '未关台唯一标记',
     INDEX idx_otf_table (桌台编号),
+    UNIQUE KEY uniq_otf_table_active (`桌台编号`, active_marker),
     CONSTRAINT fk_otf_consumption FOREIGN KEY (consumption_id) REFERENCES ongoing_consumptions(id)
 ) COMMENT '待结算台位费明细';
 
@@ -156,3 +163,22 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     INDEX idx_outbox_status_retry (status, next_retry_at, event_id),
     INDEX idx_outbox_type (event_type)
 ) COMMENT '事务性 outbox 事件表';
+
+-- ============================================================
+-- 第五部分：接口幂等（1 张）
+-- ============================================================
+
+-- 12. 写操作幂等记录表
+-- idempotency_key 直接作为主键：同一个请求键并发到达时，数据库唯一约束
+-- 会挡住后到的请求，避免重复扣库存、重复插消费记录。
+-- response_json 保存第一次成功返回的完整四键结果，重试时原样回放。
+CREATE TABLE IF NOT EXISTS idempotency_records (
+    idempotency_key VARCHAR(128)  NOT NULL COMMENT '前端 Idempotency-Key 请求头',
+    operation       VARCHAR(50)   NOT NULL COMMENT '写操作标识，如 add_product_consumption',
+    status          VARCHAR(12)   NOT NULL DEFAULT 'processing' COMMENT 'processing / completed',
+    response_json   JSON          NULL COMMENT '第一次成功返回的四键结果',
+    created_at      BIGINT        NOT NULL COMMENT '占位创建时间戳',
+    completed_at    BIGINT        NULL COMMENT '成功完成时间戳',
+    PRIMARY KEY (idempotency_key),
+    INDEX idx_idempotency_operation (operation)
+) COMMENT '接口幂等防重记录表';

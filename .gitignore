@@ -33,6 +33,11 @@ logs/
 *.bak
 *.swp
 
+# ---- 本地渲染与导出草稿 ----
+.memo_render/
+业务编号改造备忘录.docx
+业务编号改造备忘录.pdf
+
 # ---- IDE / 编辑器 ----
 .idea/
 .vscode/

@@ -6,6 +6,6 @@
     "scripts": {
         "test": "node --test tests/frontend.test.mjs",
         "test:browser": "node tests/browser_smoke.mjs",
-        "check": "node --check app.js && node --check js/api.js && node --check js/format.js && node --check js/useTables.js && node --check js/components/TableCard.js"
+        "check": "node --check app.js && node --check js/api.js && node --check js/idempotency.js && node --check js/format.js && node --check js/useTables.js && node --check js/components/TableCard.js"
     }
 }
