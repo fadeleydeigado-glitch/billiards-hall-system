@@ -15,6 +15,7 @@ MAX_PRODUCT_ID_LENGTH = 10
 # Idempotency-Key 对业务层保持不透明，只限制数据库列宽和空值。
 # 前端使用 UUID，第三方客户端也可以传其他稳定字符串。
 MAX_IDEMPOTENCY_KEY_LENGTH = 128
+MAX_FLASH_TICKET_ID_LENGTH = 64
 
 
 TableId = Annotated[
@@ -46,6 +47,15 @@ BusinessId = Annotated[
     ),
 ]
 
+FlashTicketId = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_FLASH_TICKET_ID_LENGTH,
+    ),
+]
+
 
 class _StrictRequestModel(BaseModel):
     # 中文键名继续兼容现有前端；英文键名也接受，方便以后 AI 或新客户端。
@@ -70,3 +80,29 @@ class ConfirmPaymentRequest(_StrictRequestModel):
     """POST /payments/confirm 的请求体。"""
 
     order_id: BusinessId = Field(alias="订单编号")
+
+
+class FlashProductConsumeRequest(_StrictRequestModel):
+    """POST /flash-sale/products/consume 的请求体。"""
+
+    table_id: TableId
+    product_id: ProductId
+
+
+class FlashTableOpenRequest(_StrictRequestModel):
+    """POST /flash-sale/tables/open 的请求体。"""
+
+    table_id: TableId
+
+
+class FlashProductPreheatRequest(_StrictRequestModel):
+    """POST /flash-sale/admin/products/preheat 的请求体。"""
+
+    product_id: ProductId
+    quantity: int = Field(ge=0, le=100_000)
+
+
+class FlashTablesPreheatRequest(_StrictRequestModel):
+    """POST /flash-sale/admin/tables/preheat 的请求体。"""
+
+    table_ids: list[TableId] = Field(min_length=1, max_length=1_000)

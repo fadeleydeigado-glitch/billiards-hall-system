@@ -1,0 +1,146 @@
+{
+  "metadata": {
+    "label": "flash-sale-smoke",
+    "recorded_at": "2026-11-17T02:15:21+08:00",
+    "target": "http://127.0.0.1:8011/flash-sale/products/consume",
+    "database": "billiards_hall_test",
+    "table_id": "FBT6A004D",
+    "product_id": "FBP6A004D",
+    "python_version": "3.12.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "scenarios": [
+      {
+        "workers": 1,
+        "requests": 10
+      }
+    ],
+    "repeat": 1,
+    "warmup_per_round": 2,
+    "sold_out_scenario": {
+      "workers": 20,
+      "requests": 20,
+      "tokens": 5
+    },
+    "notes": [
+      "入口延迟只覆盖 HTTP 接单与内存发牌，不等待数据库落库。",
+      "drain_after_burst_seconds 从正式请求全部返回后开始计时。",
+      "worker_average_rate_per_second 使用正式请求数 / 入口至排空总耗时。",
+      "每轮数据库检查商品库存、消费行、消费数量、幂等行和 outbox 行。"
+    ]
+  },
+  "rounds": [
+    {
+      "round_index": 1,
+      "workers": 1,
+      "requests": 10,
+      "warmup": 2,
+      "preheated_tokens": 12,
+      "entry": {
+        "requests": 10,
+        "accepted": 10,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 0.694699992891401,
+        "p95_ms": 1.784599997336045,
+        "p99_ms": 1.784599997336045,
+        "average_ms": 0.796649997937493,
+        "minimum_ms": 0.5226000066613778,
+        "maximum_ms": 1.784599997336045,
+        "wall_seconds": 0.008224799996241927,
+        "throughput_requests_per_second": 1215.835036057922,
+        "accepted_p50_ms": 0.694699992891401,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 9,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 0.0729661999939708,
+      "end_to_end_seconds": 0.08119099999021273,
+      "worker_average_rate_per_second": 123.16636081838458,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 12,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 12,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 12,
+        "consumption_quantity": 12,
+        "idempotency_rows": 12,
+        "outbox_rows": 12,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    }
+  ],
+  "sold_out": {
+    "workers": 20,
+    "requests": 20,
+    "tokens": 5,
+    "entry": {
+      "requests": 20,
+      "accepted": 5,
+      "rejected_sold_out": 15,
+      "errors": 0,
+      "p50_ms": 18.150100004277192,
+      "p95_ms": 33.481899998150766,
+      "p99_ms": 34.05170000041835,
+      "average_ms": 20.762719999765977,
+      "minimum_ms": 9.584500003256835,
+      "maximum_ms": 34.05170000041835,
+      "wall_seconds": 0.035151999996742234,
+      "throughput_requests_per_second": 568.9576696021146,
+      "accepted_p50_ms": 11.454099992988631,
+      "rejected_p50_ms": 23.568700009491295,
+      "error_samples": []
+    },
+    "drain_after_burst_seconds": 0.024123499999404885,
+    "ticket_statuses": {
+      "queued": 0,
+      "succeeded": 5,
+      "failed": 0
+    },
+    "database_verification": {
+      "expected_successes": 5,
+      "expected_stock": 10,
+      "actual_stock": 10,
+      "consumption_rows": 5,
+      "consumption_quantity": 5,
+      "idempotency_rows": 5,
+      "outbox_rows": 5,
+      "all_checks_passed": true,
+      "checks": {
+        "stock_matches": true,
+        "consumption_rows_match": true,
+        "consumption_quantity_match": true,
+        "idempotency_rows_match": true,
+        "outbox_rows_match": true
+      }
+    },
+    "checks": {
+      "accepted_matches_tokens": true,
+      "rejected_matches_remainder": true,
+      "no_other_errors": true,
+      "tickets_succeeded": true,
+      "tickets_not_failed": true,
+      "database_matches": true
+    },
+    "passed": true
+  }
+}

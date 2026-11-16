@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from decimal import Decimal
 from unittest.mock import patch
 
-from backend import controller_layer
+from backend import controller_layer, local_cache
 from backend.errors import status_code_for_result
 
 
@@ -15,6 +15,7 @@ TABLE_ID = "1"
 
 class OpenTableUnsettledTests(unittest.TestCase):
     def setUp(self):
+        local_cache.clear_all()
         self.tables = {
             TABLE_ID: {
                 "每小时价格": Decimal("30.00"),
@@ -73,8 +74,13 @@ class OpenTableUnsettledTests(unittest.TestCase):
                 "message": "ok",
             }
 
+        events = []
+
         def fake_execute(operation):
-            return operation(object())
+            result = operation(object())
+            if result["status"] == "success":
+                events.append("commit")
+            return result
 
         with ExitStack() as stack:
             def patch_controller(name, **kwargs):
@@ -135,6 +141,10 @@ class OpenTableUnsettledTests(unittest.TestCase):
                 "one_insert_ongoing_table_fee_to_mysql",
                 return_value=self.insert_result,
             )
+            invalidate_mock = patch_controller(
+                "invalidate_tables_cache_after_commit",
+                side_effect=lambda: events.append("invalidate"),
+            )
             patch_controller("one_write_business_log", return_value=None)
 
             result = controller_layer.three_open_table(
@@ -142,10 +152,10 @@ class OpenTableUnsettledTests(unittest.TestCase):
                 confirm_unsettled=confirm_unsettled,
             )
 
-        return result, insert_mock
+        return result, insert_mock, invalidate_mock, events
 
     def test_open_table_warns_before_mixing_unsettled_consumptions(self):
-        result, insert_mock = self._run_open()
+        result, insert_mock, invalidate_mock, _events = self._run_open()
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(
@@ -160,21 +170,29 @@ class OpenTableUnsettledTests(unittest.TestCase):
         )
         self.assertTrue(result["data"]["可确认开台"])
         insert_mock.assert_not_called()
+        invalidate_mock.assert_not_called()
 
     def test_open_table_can_continue_after_confirmation(self):
-        result, insert_mock = self._run_open(confirm_unsettled=True)
+        result, insert_mock, invalidate_mock, events = self._run_open(
+            confirm_unsettled=True
+        )
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["data"]["消费记录编号"], "T_1_new")
         insert_mock.assert_called_once()
+        invalidate_mock.assert_called_once()
+        self.assertEqual(events, ["commit", "invalidate"])
 
     def test_occupied_table_error_takes_precedence(self):
-        result, insert_mock = self._run_open(empty_tables=[])
+        result, insert_mock, invalidate_mock, _events = self._run_open(
+            empty_tables=[]
+        )
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["error_type"], "TableOccupied")
         self.assertEqual(status_code_for_result(result), 409)
         insert_mock.assert_not_called()
+        invalidate_mock.assert_not_called()
 
 
 if __name__ == "__main__":

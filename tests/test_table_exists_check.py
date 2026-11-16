@@ -4,7 +4,7 @@
 import unittest
 from unittest.mock import patch
 
-from backend import controller_layer
+from backend import controller_layer, local_cache
 from backend.errors import status_code_for_result
 
 
@@ -18,6 +18,9 @@ def success_result(tables: dict) -> dict:
 
 
 class CheckTableExistsTests(unittest.TestCase):
+    def setUp(self):
+        local_cache.clear_all()
+
     def test_existing_table_returns_true(self):
         with patch.object(
             controller_layer,
@@ -61,6 +64,7 @@ class CheckTableExistsTests(unittest.TestCase):
 
 class TableGuardTests(unittest.TestCase):
     def setUp(self):
+        local_cache.clear_all()
         self.tables_patch = patch.object(
             controller_layer,
             "one_load_billiards_tables_from_mysql",

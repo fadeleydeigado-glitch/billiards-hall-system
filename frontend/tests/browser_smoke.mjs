@@ -165,6 +165,44 @@ async function main() {
             throw new Error(message);
         }
 
+        function requestCountContaining(fragment) {
+            return cdp.events.filter((event) => (
+                event.method === "Network.requestWillBeSent"
+                && event.params?.request?.url?.includes(fragment)
+            )).length;
+        }
+
+        function refreshRequestCount() {
+            return requestCountContaining("/frontend/refresh");
+        }
+
+        async function waitForRequestsContaining(
+            fragment,
+            minimum,
+            message,
+            timeout = 6000
+        ) {
+            const deadline = Date.now() + timeout;
+
+            while (Date.now() < deadline) {
+                if (requestCountContaining(fragment) >= minimum) {
+                    return;
+                }
+                await sleep(100);
+            }
+
+            throw new Error(message);
+        }
+
+        async function waitForRefreshRequests(minimum, message, timeout = 6000) {
+            return waitForRequestsContaining(
+                "/frontend/refresh",
+                minimum,
+                message,
+                timeout
+            );
+        }
+
         await waitFor(
             "document.querySelectorAll('[data-table-id]').length === 4",
             "Vue table cards did not render"
@@ -240,6 +278,20 @@ async function main() {
             "使用中"
         );
         assert.equal(
+            await evaluate(
+                "document.querySelector('form[data-action=\"open-table\"] button[type=\"submit\"]').disabled"
+            ),
+            true,
+            "Open-table button should disable after the table becomes occupied"
+        );
+        assert.equal(
+            await evaluate(
+                "document.querySelector('form[data-action=\"close-table\"] button[type=\"submit\"]').disabled"
+            ),
+            false,
+            "Close-table button should enable while the table is occupied"
+        );
+        assert.equal(
             await evaluate("document.querySelector('dialog.table-dialog').getBoundingClientRect().width <= window.innerWidth"),
             true,
             "The dialog should fit inside the desktop viewport"
@@ -255,19 +307,51 @@ async function main() {
         );
         assert.notEqual(firstDuration, secondDuration, "Live duration did not tick");
 
-        const requestCountBeforeIdle = cdp.events.filter(
-            (event) => event.method === "Network.requestWillBeSent"
-        ).length;
+        const refreshCountBeforeIdle = refreshRequestCount();
         await sleep(2200);
-        const requestCountAfterIdle = cdp.events.filter(
-            (event) => event.method === "Network.requestWillBeSent"
-        ).length;
+        const refreshCountAfterIdle = refreshRequestCount();
         assert.equal(
-            requestCountAfterIdle,
-            requestCountBeforeIdle,
-            "The one-second clock should not poll the backend"
+            refreshCountAfterIdle - refreshCountBeforeIdle <= 1,
+            true,
+            "The one-second clock must not trigger per-second refreshes"
         );
-        console.log("✔ elapsed time ticks locally without extra API requests");
+        await waitForRefreshRequests(
+            refreshCountBeforeIdle + 1,
+            "Visible-page polling did not request a fresh snapshot within five seconds",
+            5200
+        );
+
+        await evaluate(`
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                get: () => "hidden"
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            true
+        `);
+        await sleep(250);
+        const refreshCountHiddenStable = refreshRequestCount();
+        await sleep(4300);
+        assert.equal(
+            refreshRequestCount(),
+            refreshCountHiddenStable,
+            "Polling should pause while the page is hidden"
+        );
+
+        await evaluate(`
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                get: () => "visible"
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            true
+        `);
+        await waitForRefreshRequests(
+            refreshCountHiddenStable + 1,
+            "Returning to the visible page should refresh immediately",
+            2500
+        );
+        console.log("✔ elapsed time ticks locally while four-second polling and visibility pause work");
 
         await evaluate(
             "document.querySelector('[data-action=\"add-product\"] [data-role=\"product-select\"]').click(); true"
@@ -313,6 +397,60 @@ async function main() {
             false,
             "Checkbox changes must not introduce a frontend total"
         );
+        await evaluate(`
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                get: () => "hidden"
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            true
+        `);
+        await sleep(300);
+        await fetch("http://127.0.0.1:8765/__delay_refresh?ms=250", {
+            method: "POST"
+        });
+        const refreshRequestsBeforeQueuedClicks = refreshRequestCount();
+        const checkoutRequestsBefore = requestCountContaining("/tables/checkout-options");
+        await evaluate(`
+            const button = document.querySelector('.hero-actions .button-light');
+            button.click();
+            button.click();
+            true
+        `);
+        await waitForRefreshRequests(
+            refreshRequestsBeforeQueuedClicks + 2,
+            "Rapid refresh requests were not queued into a follow-up snapshot"
+        );
+        await fetch("http://127.0.0.1:8765/__delay_refresh?ms=0", {
+            method: "POST"
+        });
+        await waitForRequestsContaining(
+            "/tables/checkout-options",
+            checkoutRequestsBefore + 1,
+            "Manual refresh did not refresh the open checkout panel"
+        );
+        await evaluate(`
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                get: () => "visible"
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            true
+        `);
+        assert.equal(
+            await evaluate(
+                "document.querySelectorAll('[data-action=\"create-unpaid-order\"] .checkout-item').length"
+            ),
+            2,
+            "Checkout items should remain visible after manual refresh"
+        );
+        assert.equal(
+            await evaluate(
+                "document.querySelector('.checkout-summary').textContent.includes('已选 1 项')"
+            ),
+            true,
+            "Manual refresh should preserve checkout selections"
+        );
         console.log("✔ checkout shows backend line items without a frontend total");
 
         await evaluate(
@@ -343,6 +481,24 @@ async function main() {
             "¥51",
             "Payment preview should display the backend total verbatim"
         );
+        await waitFor(
+            "document.querySelector('.hero-actions .button-light').disabled === false",
+            "Manual refresh button stayed disabled before payment refresh"
+        );
+        const paymentRequestsBefore = requestCountContaining("/frontend/unpaid-orders");
+        await evaluate(
+            "document.querySelector('.hero-actions .button-light').click(); true"
+        );
+        await waitForRequestsContaining(
+            "/frontend/unpaid-orders",
+            paymentRequestsBefore + 1,
+            "Manual refresh did not refresh the payment panel"
+        );
+        assert.equal(
+            (await evaluate("document.querySelector('.payment-total').textContent.trim()")),
+            "¥51",
+            "Payment preview should survive a background recalibration"
+        );
         console.log("✔ payment preview displays the backend order total");
 
         await cdp.command("Emulation.setDeviceMetricsOverride", {
@@ -368,6 +524,49 @@ async function main() {
             "The dialog should fit inside the mobile viewport"
         );
         console.log("✔ desktop and mobile layouts fit their viewports");
+
+        await evaluate(
+            "document.querySelector('.icon-button').click(); true"
+        );
+        await evaluate(`
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                get: () => "hidden"
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            true
+        `);
+        await fetch("http://127.0.0.1:8765/tables/open?table_id=4", {
+            method: "POST"
+        });
+        await evaluate(
+            "document.querySelector('[data-table-id=\"4\"]').click(); true"
+        );
+        await waitFor(
+            "document.querySelector('dialog.table-dialog')?.open === true",
+            "Conflict test dialog did not open"
+        );
+        await evaluate(
+            "document.querySelector('form[data-action=\"open-table\"] button[type=\"submit\"]').click(); true"
+        );
+        await waitFor(
+            "document.querySelector('[data-table-id=\"4\"]')?.dataset.status === 'open'",
+            "Conflict failure did not auto-refresh the occupied table"
+        );
+        assert.equal(
+            await evaluate(
+                "document.querySelector('form[data-action=\"open-table\"] button[type=\"submit\"]').disabled"
+            ),
+            true,
+            "Open-table button should disable after conflict recalibration"
+        );
+        assert.equal(
+            await evaluate(
+                "document.querySelector('.notice')?.textContent.includes('已自动同步最新状态') === true"
+            ),
+            true,
+            "Conflict recovery should explain that the UI was recalibrated"
+        );
 
         // 开台提醒会按设计返回 409，Chrome 会把这次 HTTP 状态记录成
         // "Failed to load resource"。除此之外不应该有运行时异常。

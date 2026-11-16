@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import flash_sale_service
 from .controller_layer import (
     three_get_frontend_refresh_data,
     three_get_frontend_products_data,
@@ -22,6 +23,11 @@ from .json_utils import decimal_to_json
 from .schemas import (
     ConfirmPaymentRequest,
     CreateUnpaidOrderRequest,
+    FlashProductConsumeRequest,
+    FlashProductPreheatRequest,
+    FlashTableOpenRequest,
+    FlashTablesPreheatRequest,
+    FlashTicketId,
     MAX_IDEMPOTENCY_KEY_LENGTH,
     ProductId,
     TableId,
@@ -32,6 +38,16 @@ app = FastAPI()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+
+@app.on_event("startup")
+def start_flash_sale_worker():
+    flash_sale_service.ensure_flash_sale_worker()
+
+
+@app.on_event("shutdown")
+def stop_flash_sale_worker():
+    flash_sale_service.stop_flash_sale_worker(drain=True, timeout=5)
 
 
 @app.exception_handler(RequestValidationError)
@@ -198,3 +214,48 @@ def api_add_product_consumption(
             idempotency_key=normalized_key
         )
     )
+
+
+@app.post("/flash-sale/products/consume")
+def api_flash_sale_consume_product(payload: FlashProductConsumeRequest):
+    return _json_response(flash_sale_service.acquire_product_ticket(
+        payload.table_id,
+        payload.product_id,
+    ))
+
+
+@app.post("/flash-sale/tables/open")
+def api_flash_sale_open_table(payload: FlashTableOpenRequest):
+    return _json_response(
+        flash_sale_service.acquire_table_ticket(payload.table_id)
+    )
+
+
+@app.get("/flash-sale/tickets/{ticket_id}")
+def api_flash_sale_get_ticket(ticket_id: FlashTicketId):
+    return _json_response(flash_sale_service.get_ticket(ticket_id))
+
+
+@app.post("/flash-sale/admin/products/preheat")
+def api_flash_sale_preheat_product(payload: FlashProductPreheatRequest):
+    return _json_response(flash_sale_service.preheat_product(
+        payload.product_id,
+        payload.quantity,
+    ))
+
+
+@app.post("/flash-sale/admin/tables/preheat")
+def api_flash_sale_preheat_tables(payload: FlashTablesPreheatRequest):
+    return _json_response(
+        flash_sale_service.preheat_tables(payload.table_ids)
+    )
+
+
+@app.get("/flash-sale/admin/pools")
+def api_flash_sale_pool_status():
+    return _json_response(flash_sale_service.get_pool_status())
+
+
+@app.post("/flash-sale/admin/reset")
+def api_flash_sale_reset():
+    return _json_response(flash_sale_service.reset_flash_sale_pool())

@@ -1,0 +1,571 @@
+{
+  "metadata": {
+    "label": "flash-sale-ab-vs-mysql",
+    "recorded_at": "2026-11-17T02:16:52+08:00",
+    "target": "http://127.0.0.1:8011/flash-sale/products/consume",
+    "database": "billiards_hall_test",
+    "table_id": "FBT31FF57",
+    "product_id": "FBP31FF57",
+    "python_version": "3.12.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "scenarios": [
+      {
+        "workers": 1,
+        "requests": 50
+      },
+      {
+        "workers": 10,
+        "requests": 300
+      },
+      {
+        "workers": 25,
+        "requests": 500
+      },
+      {
+        "workers": 50,
+        "requests": 1000
+      }
+    ],
+    "repeat": 2,
+    "warmup_per_round": 10,
+    "sold_out_scenario": {
+      "workers": 20,
+      "requests": 20,
+      "tokens": 5
+    },
+    "notes": [
+      "入口延迟只覆盖 HTTP 接单与内存发牌，不等待数据库落库。",
+      "drain_after_burst_seconds 从正式请求全部返回后开始计时。",
+      "worker_average_rate_per_second 使用正式请求数 / 入口至排空总耗时。",
+      "每轮数据库检查商品库存、消费行、消费数量、幂等行和 outbox 行。"
+    ]
+  },
+  "rounds": [
+    {
+      "round_index": 1,
+      "workers": 1,
+      "requests": 50,
+      "warmup": 10,
+      "preheated_tokens": 60,
+      "entry": {
+        "requests": 50,
+        "accepted": 50,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 0.9266999986721203,
+        "p95_ms": 2.6409999991301447,
+        "p99_ms": 15.083299993420951,
+        "average_ms": 1.4230599990696646,
+        "minimum_ms": 0.4935000033583492,
+        "maximum_ms": 15.083299993420951,
+        "wall_seconds": 0.07194779999554157,
+        "throughput_requests_per_second": 694.9482819919216,
+        "accepted_p50_ms": 0.9266999986721203,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 44,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 0.31388180000067223,
+      "end_to_end_seconds": 0.3858295999962138,
+      "worker_average_rate_per_second": 129.5908867554243,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 60,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 60,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 60,
+        "consumption_quantity": 60,
+        "idempotency_rows": 60,
+        "outbox_rows": 60,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 2,
+      "workers": 10,
+      "requests": 300,
+      "warmup": 10,
+      "preheated_tokens": 310,
+      "entry": {
+        "requests": 300,
+        "accepted": 300,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 14.02270000835415,
+        "p95_ms": 19.97819999814965,
+        "p99_ms": 23.694199990131892,
+        "average_ms": 14.099900333579475,
+        "minimum_ms": 5.586300001596101,
+        "maximum_ms": 32.2057000012137,
+        "wall_seconds": 0.43274489999748766,
+        "throughput_requests_per_second": 693.2490712235815,
+        "accepted_p50_ms": 14.02270000835415,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 273,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 2.0194625000003725,
+      "end_to_end_seconds": 2.45220739999786,
+      "worker_average_rate_per_second": 122.33875487051453,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 310,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 310,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 310,
+        "consumption_quantity": 310,
+        "idempotency_rows": 310,
+        "outbox_rows": 310,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 3,
+      "workers": 25,
+      "requests": 500,
+      "warmup": 10,
+      "preheated_tokens": 510,
+      "entry": {
+        "requests": 500,
+        "accepted": 500,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 37.235799987684004,
+        "p95_ms": 52.52959999779705,
+        "p99_ms": 68.97069999831729,
+        "average_ms": 38.20722200002638,
+        "minimum_ms": 8.112099996651523,
+        "maximum_ms": 90.80710000125691,
+        "wall_seconds": 0.785778699995717,
+        "throughput_requests_per_second": 636.311470395832,
+        "accepted_p50_ms": 37.235799987684004,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 457,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 3.671409400005359,
+      "end_to_end_seconds": 4.457188100001076,
+      "worker_average_rate_per_second": 112.17834849731365,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 510,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 510,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 510,
+        "consumption_quantity": 510,
+        "idempotency_rows": 510,
+        "outbox_rows": 510,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 4,
+      "workers": 50,
+      "requests": 1000,
+      "warmup": 10,
+      "preheated_tokens": 1010,
+      "entry": {
+        "requests": 1000,
+        "accepted": 1000,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 73.65890000073705,
+        "p95_ms": 95.59680000529625,
+        "p99_ms": 179.11699999240227,
+        "average_ms": 71.69437180015666,
+        "minimum_ms": 9.218199993483722,
+        "maximum_ms": 287.8556000068784,
+        "wall_seconds": 1.5223640999902273,
+        "throughput_requests_per_second": 656.8730831253965,
+        "accepted_p50_ms": 73.65890000073705,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 908,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 9.83820710000873,
+      "end_to_end_seconds": 11.360571199998958,
+      "worker_average_rate_per_second": 88.02374303152044,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 1010,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 1010,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 1010,
+        "consumption_quantity": 1010,
+        "idempotency_rows": 1010,
+        "outbox_rows": 1010,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 5,
+      "workers": 1,
+      "requests": 50,
+      "warmup": 10,
+      "preheated_tokens": 60,
+      "entry": {
+        "requests": 50,
+        "accepted": 50,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 1.1421999952290207,
+        "p95_ms": 2.7002999995602295,
+        "p99_ms": 3.5592000058386475,
+        "average_ms": 1.4580299987574108,
+        "minimum_ms": 0.5844999977853149,
+        "maximum_ms": 3.5592000058386475,
+        "wall_seconds": 0.0740325000078883,
+        "throughput_requests_per_second": 675.3790564234952,
+        "accepted_p50_ms": 1.1421999952290207,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 40,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 0.2235856000042986,
+      "end_to_end_seconds": 0.2976181000121869,
+      "worker_average_rate_per_second": 168.00053490682384,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 60,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 60,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 60,
+        "consumption_quantity": 60,
+        "idempotency_rows": 60,
+        "outbox_rows": 60,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 6,
+      "workers": 10,
+      "requests": 300,
+      "warmup": 10,
+      "preheated_tokens": 310,
+      "entry": {
+        "requests": 300,
+        "accepted": 300,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 14.509000000543892,
+        "p95_ms": 24.696399996173568,
+        "p99_ms": 30.98389999649953,
+        "average_ms": 15.274173999593282,
+        "minimum_ms": 5.913900007726625,
+        "maximum_ms": 41.07789999397937,
+        "wall_seconds": 0.4643099999957485,
+        "throughput_requests_per_second": 646.12004911104,
+        "accepted_p50_ms": 14.509000000543892,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 264,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 1.8454507999995258,
+      "end_to_end_seconds": 2.3097607999952743,
+      "worker_average_rate_per_second": 129.8835792869174,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 310,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 310,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 310,
+        "consumption_quantity": 310,
+        "idempotency_rows": 310,
+        "outbox_rows": 310,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 7,
+      "workers": 25,
+      "requests": 500,
+      "warmup": 10,
+      "preheated_tokens": 510,
+      "entry": {
+        "requests": 500,
+        "accepted": 500,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 33.17350000725128,
+        "p95_ms": 47.972200001822785,
+        "p99_ms": 74.29839999531396,
+        "average_ms": 33.831899199984036,
+        "minimum_ms": 7.1235000068554655,
+        "maximum_ms": 92.65540000342298,
+        "wall_seconds": 0.6939816999947652,
+        "throughput_requests_per_second": 720.4800933565994,
+        "accepted_p50_ms": 33.17350000725128,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 453,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 3.529981100000441,
+      "end_to_end_seconds": 4.223962799995206,
+      "worker_average_rate_per_second": 118.37225460427054,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 510,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 510,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 510,
+        "consumption_quantity": 510,
+        "idempotency_rows": 510,
+        "outbox_rows": 510,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    },
+    {
+      "round_index": 8,
+      "workers": 50,
+      "requests": 1000,
+      "warmup": 10,
+      "preheated_tokens": 1010,
+      "entry": {
+        "requests": 1000,
+        "accepted": 1000,
+        "rejected_sold_out": 0,
+        "errors": 0,
+        "p50_ms": 25.22070000122767,
+        "p95_ms": 41.02740000234917,
+        "p99_ms": 114.2872000054922,
+        "average_ms": 27.862281599998823,
+        "minimum_ms": 4.028299998026341,
+        "maximum_ms": 164.74140000354964,
+        "wall_seconds": 0.5950541000056546,
+        "throughput_requests_per_second": 1680.51946871805,
+        "accepted_p50_ms": 25.22070000122767,
+        "rejected_p50_ms": null,
+        "error_samples": []
+      },
+      "queue_at_burst_end": {
+        "pending": 945,
+        "processing": true
+      },
+      "drain_after_burst_seconds": 11.673702600004617,
+      "end_to_end_seconds": 12.268756700010272,
+      "worker_average_rate_per_second": 81.50785156568985,
+      "ticket_statuses": {
+        "queued": 0,
+        "succeeded": 1010,
+        "failed": 0
+      },
+      "ticket_checks": {
+        "all_tickets_succeeded": true,
+        "no_failed_tickets": true,
+        "no_queued_tickets": true
+      },
+      "database_verification": {
+        "expected_successes": 1010,
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "consumption_rows": 1010,
+        "consumption_quantity": 1010,
+        "idempotency_rows": 1010,
+        "outbox_rows": 1010,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "consumption_rows_match": true,
+          "consumption_quantity_match": true,
+          "idempotency_rows_match": true,
+          "outbox_rows_match": true
+        }
+      },
+      "passed": true
+    }
+  ],
+  "sold_out": {
+    "workers": 20,
+    "requests": 20,
+    "tokens": 5,
+    "entry": {
+      "requests": 20,
+      "accepted": 5,
+      "rejected_sold_out": 15,
+      "errors": 0,
+      "p50_ms": 18.354900006670505,
+      "p95_ms": 25.084799999604,
+      "p99_ms": 25.51320000202395,
+      "average_ms": 18.120455000462243,
+      "minimum_ms": 6.226099998457357,
+      "maximum_ms": 25.51320000202395,
+      "wall_seconds": 0.0276231000025291,
+      "throughput_requests_per_second": 724.0316980414527,
+      "accepted_p50_ms": 13.377700001001358,
+      "rejected_p50_ms": 21.688799999537878,
+      "error_samples": []
+    },
+    "drain_after_burst_seconds": 0.06637800000316929,
+    "ticket_statuses": {
+      "queued": 0,
+      "succeeded": 5,
+      "failed": 0
+    },
+    "database_verification": {
+      "expected_successes": 5,
+      "expected_stock": 10,
+      "actual_stock": 10,
+      "consumption_rows": 5,
+      "consumption_quantity": 5,
+      "idempotency_rows": 5,
+      "outbox_rows": 5,
+      "all_checks_passed": true,
+      "checks": {
+        "stock_matches": true,
+        "consumption_rows_match": true,
+        "consumption_quantity_match": true,
+        "idempotency_rows_match": true,
+        "outbox_rows_match": true
+      }
+    },
+    "checks": {
+      "accepted_matches_tokens": true,
+      "rejected_matches_remainder": true,
+      "no_other_errors": true,
+      "tickets_succeeded": true,
+      "tickets_not_failed": true,
+      "database_matches": true
+    },
+    "passed": true
+  }
+}

@@ -28,6 +28,7 @@ ERROR_STATUS = {
     "TableFeeNotFound": 404,
     "SelectedConsumptionNotFound": 404,
     "OpenTableConsumptionNotFound": 404,
+    "FlashTicketNotFound": 404,
 
     # 409：资源存在，但当前状态不允许这个操作。
     "TableOccupied": 409,
@@ -40,6 +41,8 @@ ERROR_STATUS = {
     "SelectedConsumptionAmountNotReady": 409,
     "IdempotencyKeyReused": 409,
     "IdempotencyInProgress": 409,
+    "FlashSaleSoldOut": 409,
+    "FlashSalePoolBusy": 409,
 
     # 422：请求形状错误；Pydantic 已挡住大部分，controller 仍保留兜底检查。
     "TableIdFormatError": 422,
@@ -59,6 +62,10 @@ ERROR_STATUS = {
     "ProductCountFormatError": 422,
     "IdempotencyKeyRequired": 422,
     "IdempotencyKeyFormatError": 422,
+    "FlashSaleQuantityInvalid": 422,
+
+    # 503：热点抢购引擎尚未就绪，可稍后重试。
+    "FlashSaleEngineNotReady": 503,
 
     # 500 条目显式列出，方便排查服务端问题；未列出的 error_type 也默认 500。
     "TableFeeIdFormatError": 500,
@@ -72,6 +79,7 @@ ERROR_STATUS = {
     "UnknownConsumptionType": 500,
     "IdempotencyRecordCorrupted": 500,
     "IdempotencyWriteFailed": 500,
+    "FlashTicketReadFailed": 500,
 }
 
 

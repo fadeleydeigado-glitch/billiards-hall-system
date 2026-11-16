@@ -1,0 +1,68 @@
+{
+  "metadata": {
+    "label": "smoke",
+    "recorded_at": "2026-11-17T00:41:59+08:00",
+    "target": "http://127.0.0.1:8011/products/consumption",
+    "database": "billiards_hall_test",
+    "test_table_id": "B99",
+    "test_product_id": "PBENCH01",
+    "python_version": "3.12.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "warmup_per_round": 2,
+    "repeat": 1,
+    "scenarios": [
+      {
+        "workers": 1,
+        "requests": 10
+      }
+    ],
+    "notes": [
+      "HTTP 压测包含 FastAPI/控制器/MySQL 事务/幂等记录/outbox 写入。",
+      "每轮使用独立商品库存，请求数量小于库存，因此成功请求不应出现库存不足。",
+      "本机合成压测结果不代表生产 SLA。"
+    ]
+  },
+  "rounds": [
+    {
+      "round_index": 1,
+      "workers": 1,
+      "requests": 10,
+      "warmup": 2,
+      "warmup_successes": 2,
+      "successes": 10,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 10.908099997323006,
+      "p95_ms": 16.9803999888245,
+      "p99_ms": 16.9803999888245,
+      "average_ms": 11.402129998896271,
+      "minimum_ms": 6.879400010802783,
+      "maximum_ms": 16.9803999888245,
+      "wall_seconds": 0.11446630000136793,
+      "throughput_requests_per_second": 87.36195718635524,
+      "success_throughput_per_second": 87.36195718635524,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 12,
+        "ongoing_consumptions": 12,
+        "product_consumptions": 12,
+        "idempotency_records": 12,
+        "outbox_events": 12,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    }
+  ]
+}

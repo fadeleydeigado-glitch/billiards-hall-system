@@ -1,0 +1,367 @@
+{
+  "metadata": {
+    "label": "pure-mysql-stock-baseline",
+    "recorded_at": "2026-11-17T00:42:24+08:00",
+    "target": "http://127.0.0.1:8011/products/consumption",
+    "database": "billiards_hall_test",
+    "test_table_id": "B99",
+    "test_product_id": "PBENCH01",
+    "python_version": "3.12.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "warmup_per_round": 10,
+    "repeat": 2,
+    "scenarios": [
+      {
+        "workers": 1,
+        "requests": 50
+      },
+      {
+        "workers": 10,
+        "requests": 300
+      },
+      {
+        "workers": 25,
+        "requests": 500
+      },
+      {
+        "workers": 50,
+        "requests": 1000
+      }
+    ],
+    "notes": [
+      "HTTP 压测包含 FastAPI/控制器/MySQL 事务/幂等记录/outbox 写入。",
+      "每轮使用独立商品库存，请求数量小于库存，因此成功请求不应出现库存不足。",
+      "本机合成压测结果不代表生产 SLA。"
+    ]
+  },
+  "rounds": [
+    {
+      "round_index": 1,
+      "workers": 1,
+      "requests": 50,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 50,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 6.20129999879282,
+      "p95_ms": 8.816399989882484,
+      "p99_ms": 12.040200002957135,
+      "average_ms": 6.582215999078471,
+      "minimum_ms": 4.6175000024959445,
+      "maximum_ms": 12.040200002957135,
+      "wall_seconds": 0.3302333000028739,
+      "throughput_requests_per_second": 151.40811056778608,
+      "success_throughput_per_second": 151.40811056778608,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 60,
+        "ongoing_consumptions": 60,
+        "product_consumptions": 60,
+        "idempotency_records": 60,
+        "outbox_events": 60,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 2,
+      "workers": 10,
+      "requests": 300,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 300,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 50.4025999980513,
+      "p95_ms": 77.56019999214914,
+      "p99_ms": 311.63589999778196,
+      "average_ms": 60.139514666613344,
+      "minimum_ms": 16.94139999744948,
+      "maximum_ms": 322.49310000042897,
+      "wall_seconds": 1.8513118999981089,
+      "throughput_requests_per_second": 162.0472487646768,
+      "success_throughput_per_second": 162.0472487646768,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 310,
+        "ongoing_consumptions": 310,
+        "product_consumptions": 310,
+        "idempotency_records": 310,
+        "outbox_events": 310,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 3,
+      "workers": 25,
+      "requests": 500,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 500,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 86.60670000244863,
+      "p95_ms": 142.43500000156928,
+      "p99_ms": 173.6382999952184,
+      "average_ms": 91.56001200020546,
+      "minimum_ms": 13.272500000311993,
+      "maximum_ms": 199.79590000002645,
+      "wall_seconds": 1.9346409999998286,
+      "throughput_requests_per_second": 258.44588220762625,
+      "success_throughput_per_second": 258.44588220762625,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 510,
+        "ongoing_consumptions": 510,
+        "product_consumptions": 510,
+        "idempotency_records": 510,
+        "outbox_events": 510,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 4,
+      "workers": 50,
+      "requests": 1000,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 1000,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 188.45840000722092,
+      "p95_ms": 417.44800000742543,
+      "p99_ms": 537.2385999944527,
+      "average_ms": 213.6017743999546,
+      "minimum_ms": 19.2347999982303,
+      "maximum_ms": 799.2060999968089,
+      "wall_seconds": 4.615065000005416,
+      "throughput_requests_per_second": 216.68167187218955,
+      "success_throughput_per_second": 216.68167187218955,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 1010,
+        "ongoing_consumptions": 1010,
+        "product_consumptions": 1010,
+        "idempotency_records": 1010,
+        "outbox_events": 1010,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 5,
+      "workers": 1,
+      "requests": 50,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 50,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 6.143299993709661,
+      "p95_ms": 7.532799994805828,
+      "p99_ms": 32.00680000009015,
+      "average_ms": 6.632655999273993,
+      "minimum_ms": 4.72339999396354,
+      "maximum_ms": 32.00680000009015,
+      "wall_seconds": 0.3327731000026688,
+      "throughput_requests_per_second": 150.25252942500163,
+      "success_throughput_per_second": 150.25252942500163,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 60,
+        "ongoing_consumptions": 60,
+        "product_consumptions": 60,
+        "idempotency_records": 60,
+        "outbox_events": 60,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 6,
+      "workers": 10,
+      "requests": 300,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 300,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 28.272299998207018,
+      "p95_ms": 36.01809999963734,
+      "p99_ms": 39.74940000625793,
+      "average_ms": 28.24677333352156,
+      "minimum_ms": 18.57179999933578,
+      "maximum_ms": 40.69550000713207,
+      "wall_seconds": 0.8599046000017552,
+      "throughput_requests_per_second": 348.87591018746457,
+      "success_throughput_per_second": 348.87591018746457,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 310,
+        "ongoing_consumptions": 310,
+        "product_consumptions": 310,
+        "idempotency_records": 310,
+        "outbox_events": 310,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 7,
+      "workers": 25,
+      "requests": 500,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 500,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 76.92540000425652,
+      "p95_ms": 130.5030999938026,
+      "p99_ms": 175.27790000895038,
+      "average_ms": 81.978529999702,
+      "minimum_ms": 8.543899995856918,
+      "maximum_ms": 233.7340999947628,
+      "wall_seconds": 1.7253903999953764,
+      "throughput_requests_per_second": 289.78948764368914,
+      "success_throughput_per_second": 289.78948764368914,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 510,
+        "ongoing_consumptions": 510,
+        "product_consumptions": 510,
+        "idempotency_records": 510,
+        "outbox_events": 510,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    },
+    {
+      "round_index": 8,
+      "workers": 50,
+      "requests": 1000,
+      "warmup": 10,
+      "warmup_successes": 10,
+      "successes": 1000,
+      "failures": 0,
+      "success_rate_percent": 100.0,
+      "p50_ms": 190.93029999930877,
+      "p95_ms": 405.92190000461414,
+      "p99_ms": 545.6554999982473,
+      "average_ms": 212.85056650025945,
+      "minimum_ms": 14.936500010662712,
+      "maximum_ms": 847.9663000034634,
+      "wall_seconds": 4.597979800004396,
+      "throughput_requests_per_second": 217.48681888490333,
+      "success_throughput_per_second": 217.48681888490333,
+      "errors": {
+        "counts": {},
+        "examples": []
+      },
+      "verification": {
+        "expected_stock": 20,
+        "actual_stock": 20,
+        "expected_rows": 1010,
+        "ongoing_consumptions": 1010,
+        "product_consumptions": 1010,
+        "idempotency_records": 1010,
+        "outbox_events": 1010,
+        "all_checks_passed": true,
+        "checks": {
+          "stock_matches": true,
+          "ongoing_consumptions_match": true,
+          "product_consumptions_match": true,
+          "idempotency_records_match": true,
+          "outbox_events_match": true
+        }
+      },
+      "failed": false
+    }
+  ]
+}

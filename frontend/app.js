@@ -10,7 +10,34 @@ import { TableCard } from "./js/components/TableCard.js";
 import { createIdempotencyKeyStore } from "./js/idempotency.js";
 import { useTables } from "./js/useTables.js";
 
-const { computed, onMounted, reactive, ref } = window.Vue;
+const {
+    computed,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref
+} = window.Vue;
+
+const REFRESH_INTERVAL_MS = 4000;
+const TABLE_CONFLICT_ERRORS = new Set([
+    "TableOccupied",
+    "TableFeeAlreadyClosed",
+    "OpenTableConsumptionNotFound",
+    "TableFeeNotFound"
+]);
+const PRODUCT_CONFLICT_ERRORS = new Set([
+    "ProductStockNotEnough",
+    "ProductNotFound"
+]);
+const PAYMENT_CONFLICT_ERRORS = new Set([
+    "OrderNotUnpaid",
+    "OrderNotFound"
+]);
+const CHECKOUT_CONFLICT_ERRORS = new Set([
+    "SelectedConsumptionNotFound",
+    "ConsumptionAlreadyInUnpaidOrder",
+    "TableNotClosed"
+]);
 
 function normalizeProduct(productId, productData) {
     return {
@@ -43,6 +70,14 @@ const App = {
         });
 
         const isRefreshing = ref(false);
+        const isBackgroundRefreshing = ref(false);
+        const refreshButtonBusy = computed(() => (
+            isRefreshing.value && !isBackgroundRefreshing.value
+        ));
+        let refreshPromise = null;
+        let pendingRefresh = false;
+        let pendingRefreshOptions = null;
+        let refreshTimer = null;
         const notice = reactive({ text: "", tone: "info" });
         const resultText = ref("尚未调用接口。");
         const resultTone = ref("idle");
@@ -82,6 +117,36 @@ const App = {
                 return "未选择桌台";
             }
             return selectedTable.value.isOpen ? "使用中" : "空闲";
+        });
+        const canOpenTable = computed(() => (
+            Boolean(selectedTable.value)
+            && !selectedTable.value.isOpen
+            && !actionBusy.open
+        ));
+        const canCloseTable = computed(() => (
+            Boolean(selectedTable.value)
+            && selectedTable.value.isOpen
+            && !actionBusy.close
+        ));
+        const openButtonLabel = computed(() => {
+            if (actionBusy.open) {
+                return "处理中…";
+            }
+            return selectedTable.value?.isOpen ? "桌台使用中" : "确认开台";
+        });
+        const confirmOpenButtonLabel = computed(() => {
+            if (actionBusy.open) {
+                return "处理中…";
+            }
+            return selectedTable.value?.isOpen ? "桌台使用中" : "仍然开台";
+        });
+        const closeButtonLabel = computed(() => {
+            if (actionBusy.close) {
+                return "处理中…";
+            }
+            return selectedTable.value && !selectedTable.value.isOpen
+                ? "桌台空闲"
+                : "确认关台";
         });
         const openWarningSummary = computed(() => {
             if (!openWarning.visible || !openWarning.summary) {
@@ -139,32 +204,90 @@ const App = {
                 delete productsById[productId];
             });
             Object.assign(productsById, nextProducts);
+            reconcileProductSelection();
         }
 
-        async function refreshAll(options = {}) {
-            const {
-                announce = true,
-                updateResult = announce
-            } = options;
-
-            if (isRefreshing.value) {
-                return false;
+        function reconcileProductSelection() {
+            if (selectedProductId.value === null) {
+                return;
             }
 
-            isRefreshing.value = true;
+            const currentProduct = productsById[selectedProductId.value];
+            if (!currentProduct || currentProduct.stock <= 0) {
+                resetProductState();
+                return;
+            }
 
+            normalizeProductCount();
+        }
+
+        function normalizeRefreshOptions(options = {}) {
+            const announce = options.announce ?? true;
+            return {
+                announce,
+                updateResult: options.updateResult ?? announce,
+                quiet: options.quiet === true,
+                background: options.background === true,
+                refreshPanels: options.refreshPanels !== false
+            };
+        }
+
+        function mergeRefreshOptions(current, next) {
+            return {
+                announce: current.announce || next.announce,
+                updateResult: current.updateResult || next.updateResult,
+                quiet: current.quiet && next.quiet,
+                background: current.background && next.background,
+                refreshPanels: current.refreshPanels || next.refreshPanels
+            };
+        }
+
+        async function refreshActivePanels() {
+            const tasks = [];
+            const currentTableId = selectedTableId.value;
+
+            if (checkout.visible && currentTableId && !checkout.submitting) {
+                tasks.push(loadCheckoutOptions(currentTableId, {
+                    preserveSelection: true,
+                    quiet: true,
+                    showLoading: false
+                }));
+            }
+
+            if (
+                (payment.pickerOpen || selectedOrder.value)
+                && !payment.submitting
+            ) {
+                tasks.push(loadUnpaidOrders({
+                    quiet: true,
+                    showLoading: false
+                }));
+            }
+
+            if (tasks.length > 0) {
+                await Promise.all(tasks);
+            }
+        }
+
+        async function performRefresh(options) {
             try {
                 const result = await api.getRefreshData();
 
                 if (result.status !== "success") {
-                    publishOperation(result);
+                    if (!options.quiet) {
+                        publishOperation(result);
+                    }
                     return false;
                 }
 
                 replaceTables(result.data?.["桌台基础信息"] || {});
                 replaceProducts(result.data?.["商品信息"] || {});
 
-                if (updateResult) {
+                if (options.refreshPanels) {
+                    await refreshActivePanels();
+                }
+
+                if (options.updateResult) {
                     resultText.value = JSON.stringify({
                         status: "success",
                         error_type: null,
@@ -174,24 +297,113 @@ const App = {
                     resultTone.value = "success";
                 }
 
-                if (announce) {
+                if (options.announce) {
                     setNotice("桌台与商品信息已刷新", "success");
                 }
 
                 return true;
+            } catch (error) {
+                if (!options.quiet) {
+                    setLocalError(
+                        "RefreshFailed",
+                        error.message || "刷新数据失败"
+                    );
+                }
+                return false;
+            }
+        }
+
+        async function runRefreshLoop(initialOptions) {
+            let options = initialOptions;
+            let lastResult = false;
+            isRefreshing.value = true;
+
+            try {
+                while (true) {
+                    pendingRefresh = false;
+                    isBackgroundRefreshing.value = options.background;
+                    lastResult = await performRefresh(options);
+
+                    if (!pendingRefresh) {
+                        break;
+                    }
+
+                    options = pendingRefreshOptions || normalizeRefreshOptions({
+                        announce: false,
+                        updateResult: false,
+                        quiet: true,
+                        background: true
+                    });
+                    pendingRefreshOptions = null;
+                }
+
+                return lastResult;
             } finally {
                 isRefreshing.value = false;
+                isBackgroundRefreshing.value = false;
+                pendingRefresh = false;
+                pendingRefreshOptions = null;
             }
+        }
+
+        function refreshAll(options = {}) {
+            const normalizedOptions = normalizeRefreshOptions(options);
+
+            if (refreshPromise !== null) {
+                pendingRefresh = true;
+                pendingRefreshOptions = pendingRefreshOptions === null
+                    ? normalizedOptions
+                    : mergeRefreshOptions(
+                        pendingRefreshOptions,
+                        normalizedOptions
+                    );
+                if (!normalizedOptions.background) {
+                    isBackgroundRefreshing.value = false;
+                }
+                return refreshPromise;
+            }
+
+            refreshPromise = runRefreshLoop(normalizedOptions).finally(() => {
+                refreshPromise = null;
+            });
+            return refreshPromise;
         }
 
         async function refreshAfterMutation() {
             const refreshed = await refreshAll({
                 announce: false,
-                updateResult: false
+                updateResult: false,
+                quiet: true,
+                background: true
             });
 
             if (!refreshed && notice.tone !== "error") {
-                setNotice("操作已完成，但桌台数据刷新失败，请手动刷新。", "warning");
+                setNotice(
+                    "操作已完成，但自动同步暂未成功，页面会在可见状态继续重试。",
+                    "warning"
+                );
+            }
+        }
+
+        async function refreshAfterConflict(result) {
+            const refreshed = await refreshAll({
+                announce: false,
+                updateResult: false,
+                quiet: true,
+                background: true
+            });
+            const message = result.message || "操作状态已变化";
+
+            if (refreshed) {
+                setNotice(
+                    `${message}；已自动同步最新状态，请按当前界面重试。`,
+                    "warning"
+                );
+            } else {
+                setNotice(
+                    `${message}；自动同步暂未成功，页面会继续重试。`,
+                    "warning"
+                );
             }
         }
 
@@ -269,6 +481,9 @@ const App = {
 
                 resetOpenWarning();
                 publishOperation(result);
+                if (TABLE_CONFLICT_ERRORS.has(result.error_type)) {
+                    await refreshAfterConflict(result);
+                }
             } finally {
                 actionBusy.open = false;
             }
@@ -287,7 +502,8 @@ const App = {
 
                 if (result.status === "success") {
                     await refreshAfterMutation();
-                    await loadCheckoutOptions(selectedTableId.value);
+                } else if (TABLE_CONFLICT_ERRORS.has(result.error_type)) {
+                    await refreshAfterConflict(result);
                 }
             } finally {
                 actionBusy.close = false;
@@ -324,6 +540,12 @@ const App = {
             Boolean(selectedProduct.value)
             && selectedProduct.value.stock > 0
             && productCount.value < selectedProduct.value.stock
+        ));
+        const canSubmitProduct = computed(() => (
+            Boolean(selectedProduct.value)
+            && selectedProduct.value.stock > 0
+            && productCount.value <= selectedProduct.value.stock
+            && !actionBusy.addProduct
         ));
 
         function normalizeProductCount() {
@@ -424,6 +646,8 @@ const App = {
                     addProductIdempotency.clear();
                     resetProductState();
                     await refreshAfterMutation();
+                } else if (PRODUCT_CONFLICT_ERRORS.has(result.error_type)) {
+                    await refreshAfterConflict(result);
                 }
             } finally {
                 actionBusy.addProduct = false;
@@ -451,14 +675,21 @@ const App = {
             checkout.selectedIds = [];
         }
 
-        async function loadCheckoutOptions(tableId) {
+        async function loadCheckoutOptions(tableId, options = {}) {
             const requestTableId = String(tableId || "");
             if (!requestTableId) {
                 return false;
             }
 
+            const {
+                preserveSelection = false,
+                quiet = false,
+                showLoading = true
+            } = options;
             const requestVersion = ++checkoutRequestVersion;
-            checkout.loading = true;
+            if (showLoading) {
+                checkout.loading = true;
+            }
 
             try {
                 const result = await api.getCheckoutOptions(requestTableId);
@@ -471,12 +702,26 @@ const App = {
                 }
 
                 if (result.status !== "success") {
-                    publishOperation(result);
+                    if (!quiet) {
+                        publishOperation(result);
+                    }
                     return false;
                 }
 
-                checkout.options = result.data?.["消费明细"] || [];
-                checkout.selectedIds = [];
+                const nextOptions = result.data?.["消费明细"] || [];
+                const selectableIds = new Set(
+                    nextOptions
+                        .filter((option) => option.selectable === true)
+                        .map((option) => option.consumption_id)
+                );
+                const selectedIdsToKeep = preserveSelection
+                    ? [...checkout.selectedIds]
+                    : [];
+
+                checkout.options = nextOptions;
+                checkout.selectedIds = preserveSelection
+                    ? selectedIdsToKeep.filter((id) => selectableIds.has(id))
+                    : [];
                 checkout.visible = true;
                 return true;
             } finally {
@@ -530,9 +775,10 @@ const App = {
 
             checkout.submitting = true;
             const currentTableId = selectedTableId.value;
+            let result = null;
 
             try {
-                const result = await api.createUnpaidOrder(currentTableId, consumptionIds);
+                result = await api.createUnpaidOrder(currentTableId, consumptionIds);
                 const totalAmount = result.status === "success"
                     ? result.data?.["总金额"]
                     : null;
@@ -550,11 +796,21 @@ const App = {
                         "success"
                     );
                 }
-
-                await loadCheckoutOptions(currentTableId);
-                await refreshAll({ announce: false, updateResult: false });
             } finally {
                 checkout.submitting = false;
+            }
+
+            if (result !== null) {
+                if (CHECKOUT_CONFLICT_ERRORS.has(result.error_type)) {
+                    await refreshAfterConflict(result);
+                } else {
+                    await refreshAll({
+                        announce: false,
+                        updateResult: false,
+                        quiet: true,
+                        background: true
+                    });
+                }
             }
         }
 
@@ -589,9 +845,15 @@ const App = {
             selectedOrderId.value = null;
         }
 
-        async function loadUnpaidOrders() {
+        async function loadUnpaidOrders(options = {}) {
+            const {
+                quiet = false,
+                showLoading = true
+            } = options;
             const requestVersion = ++paymentRequestVersion;
-            payment.loading = true;
+            if (showLoading) {
+                payment.loading = true;
+            }
 
             try {
                 const result = await api.getUnpaidOrders();
@@ -601,7 +863,9 @@ const App = {
                 }
 
                 if (result.status !== "success") {
-                    publishOperation(result);
+                    if (!quiet) {
+                        publishOperation(result);
+                    }
                     return false;
                 }
 
@@ -663,17 +927,25 @@ const App = {
 
             payment.submitting = true;
             const orderId = selectedOrder.value.order_id;
+            let result = null;
 
             try {
-                const result = await api.confirmPayment(orderId);
+                result = await api.confirmPayment(orderId);
                 publishOperation(result, { hideData: true });
 
                 if (result.status === "success") {
                     selectedOrderId.value = null;
-                    await loadUnpaidOrders();
                 }
             } finally {
                 payment.submitting = false;
+            }
+
+            if (result !== null) {
+                if (PAYMENT_CONFLICT_ERRORS.has(result.error_type)) {
+                    await refreshAfterConflict(result);
+                } else if (result.status === "success") {
+                    await loadUnpaidOrders();
+                }
             }
         }
 
@@ -714,14 +986,71 @@ const App = {
             }
         }
 
+        function startPolling() {
+            if (
+                refreshTimer !== null
+                || document.visibilityState !== "visible"
+            ) {
+                return;
+            }
+
+            refreshTimer = window.setInterval(() => {
+                if (document.visibilityState === "visible") {
+                    refreshAll({
+                        announce: false,
+                        updateResult: false,
+                        quiet: true,
+                        background: true
+                    });
+                }
+            }, REFRESH_INTERVAL_MS);
+        }
+
+        function stopPolling() {
+            if (refreshTimer !== null) {
+                window.clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
+        }
+
+        function handleVisibilityChange() {
+            if (document.visibilityState === "visible") {
+                startPolling();
+                refreshAll({
+                    announce: false,
+                    updateResult: false,
+                    quiet: true,
+                    background: true
+                });
+            } else {
+                stopPolling();
+            }
+        }
+
         onMounted(() => {
-            refreshAll({ announce: false });
+            startPolling();
+            document.addEventListener("visibilitychange", handleVisibilityChange);
+            refreshAll({
+                announce: false,
+                updateResult: false
+            });
+        });
+
+        onBeforeUnmount(() => {
+            stopPolling();
+            document.removeEventListener(
+                "visibilitychange",
+                handleVisibilityChange
+            );
         });
 
         return {
             actionBusy,
             canDecreaseProduct,
             canIncreaseProduct,
+            canCloseTable,
+            canOpenTable,
+            canSubmitProduct,
             changeProductCount,
             checkout,
             checkoutAmount,
@@ -730,7 +1059,9 @@ const App = {
             chooseProduct,
             chooseUnpaidOrder,
             closeTableDialog,
+            closeButtonLabel,
             confirmOpenWithUnsettled,
+            confirmOpenButtonLabel,
             dialogElement,
             dialogTitle,
             formatClockTime,
@@ -742,11 +1073,13 @@ const App = {
             handleDialogClosed,
             idleCount,
             isRefreshing,
+            refreshButtonBusy,
             loadCheckoutOptions,
             notice,
             nowSeconds,
             normalizeProductCount,
             openCount,
+            openButtonLabel,
             openWarning,
             openWarningSummary,
             openTableDialog,

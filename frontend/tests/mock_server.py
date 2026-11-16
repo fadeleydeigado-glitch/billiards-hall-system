@@ -81,6 +81,7 @@ def reset_table_state():
 
 TABLE_STATE = {}
 reset_table_state()
+REFRESH_DELAY_MS = 0
 
 
 def table_state():
@@ -204,6 +205,8 @@ class MockHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/frontend/refresh":
+            if REFRESH_DELAY_MS > 0:
+                time.sleep(REFRESH_DELAY_MS / 1000)
             self.send_json(success({
                 "桌台基础信息": table_state(),
                 "商品信息": PRODUCTS
@@ -236,8 +239,21 @@ class MockHandler(BaseHTTPRequestHandler):
         request_body = self.rfile.read(content_length) if content_length else b"{}"
 
         if parsed.path == "/__reset":
+            global REFRESH_DELAY_MS
             reset_table_state()
+            REFRESH_DELAY_MS = 0
             self.send_json(success(None, "模拟数据已重置"))
+            return
+
+        if parsed.path == "/__delay_refresh":
+            REFRESH_DELAY_MS = max(0, min(
+                5000,
+                int(query.get("ms", ["0"])[0])
+            ))
+            self.send_json(success(
+                {"delay_ms": REFRESH_DELAY_MS},
+                "刷新延迟已更新"
+            ))
             return
 
         if parsed.path == "/orders/unpaid":

@@ -27,7 +27,8 @@
 | 收款 | 确认收款，将订单从「未支付」改为「已支付」 |
 
 前端提供桌台状态、商品选择、结账明细和收款预览；金额只展示后端返回值，
-不在浏览器里重新计算。
+不在浏览器里重新计算。页面可见时每 4 秒静默同步一次，后台暂停、回前台
+立即补拉；刷新与冲突恢复都会同步当前打开的面板。
 
 ## 技术栈
 
@@ -225,6 +226,70 @@ outbox 只用于核心备份，不用于业务日志。业务日志仍然同步�
 
 测试脚本会真实写库，必须在测试库中运行，并遵守脚本里的安全闸门。
 
+### 9. 本地缓存：短 TTL + 写后失效 + 版本号防旧值回填
+
+商品目录和桌台基础配置使用进程内 `TTLCache`，不引入 Redis：
+
+- 只缓存 `products:list` 和 `tables:config`；
+- 默认 TTL 为 300 秒，使用 `time.monotonic()` 惰性过期；
+- 缓存命中返回深拷贝，避免业务层修改共享内存；
+- 每个 key 维护独立版本号，查库前记录版本，回填前再次核对；如果期间有写
+  操作提交并递增了版本号，旧查询结果直接丢弃；
+- 开台、关台提交后失效桌台配置缓存；新增商品消费、修改商品或库存变动提交后
+  失效商品列表缓存；
+- 缓存读取和失效异常只记录告警并回退数据库，不影响主业务流程。
+
+桌台实时占用状态、待结算消费、未支付订单和支付状态不进入本地缓存，仍然每次
+以 MySQL 为准。本地缓存只适用于单进程部署；如果改为多个 Uvicorn worker，需要
+禁用本地缓存或升级为 Redis 等共享缓存。
+
+当前项目还没有新增商品和修改商品的 HTTP 接口；对应的提交后失效入口已封装为
+`invalidate_products_cache_after_commit()`，后续新增管理接口时必须在事务提交
+成功后调用。
+
+### 10. 热点抢购：内存发牌 + 单线程异步落库
+
+在原有同步接口之外新增一条试验性热点路径，老接口行为和事务防线不变：
+
+```text
+POST /flash-sale/*
+  └─ 内存锁内 popleft 单件牌
+       ├─ 没牌：立即拒绝
+       └─ 有牌：生成 ticket_id，任务进 deque，返回 queued
+                  ↓
+          单线程 daemon worker
+            ├─ 调用原有 controller 写库
+            ├─ 瞬时数据库错误最多重试 2 次
+            ├─ 成功：succeeded + 事务提交后缓存失效
+            └─ 失败：failed + 牌子退回池尾
+```
+
+实现边界：
+
+- 商品牌按“每次 1 件”拆成独立 token，不做 TTL 自动过期；
+- 桌台使用唯一使用权牌子，老路开台提交后摘牌，老路关台提交后补牌；
+- 老路成功卖出商品时也会从商品牌池尾部移除对应数量，减少双路偏差；
+- `ticket_id` 同时作为异步写库的稳定幂等键，重试不会重复扣库存；
+- 同一商品 worker 单线程顺序落库，失败任务不阻塞后续任务；
+- 内存池、任务队列和 ticket 状态都只在当前进程内，重启会丢失；ticket 状态
+  当前不自动清理，可由管理接口重置；
+- 当前是单进程试验链路，不是分布式抢购系统，也不能据此宣称生产级高并发。
+
+管理/测试接口：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/flash-sale/admin/products/preheat` | 初始化指定商品的单件牌数量 |
+| POST | `/flash-sale/admin/tables/preheat` | 初始化指定桌台的使用权牌 |
+| GET | `/flash-sale/admin/pools` | 查看内存池和队列状态 |
+| POST | `/flash-sale/admin/reset` | 队列空闲时重置内存池 |
+
+这些管理接口目前没有登录和权限控制，只适合本地管理或测试环境。
+
+对比结果见
+[2026-11-17 热点抢购 A/B 压测](docs/benchmarks/2026-11-17-flash-sale-ab-benchmark.md)：
+入口削峰明显，但单 worker 的后台落库速率仍是独立瓶颈。
+
 ## 项目结构
 
 ```text
@@ -235,6 +300,9 @@ backend/
   controller_layer.py     流程编排、事务边界、业务日志
   business_layer.py       纯校验、纯计算、数据组装
   io_layer.py             MySQL 读写、事务管理
+  local_cache.py          单进程 TTL 缓存与版本号回填
+  flash_sale_queue.py     热点发牌池、任务队列、ticket 状态和 worker
+  flash_sale_service.py   热点 worker 与现有 controller 写库接线
   outbox.py               outbox 事件与 worker 核心
   outbox_worker.py        独立 worker 启动入口
   json_utils.py           Decimal 的 JSON 出口转换
@@ -252,6 +320,9 @@ frontend/
   tests/                  前端单测、模拟接口、浏览器冒烟测试
 
 scripts/
+  bench_stock_writes.py    加商品扣库存写接口压测
+  bench_flash_sale_ab.py   热点抢购入口、排空与一致性 A/B 压测
+  bench_refresh.py         首页刷新接口只读压测
   check_data.py            数据一致性巡检（只读）
   check_outbox.py          outbox 积压/死信查看与重排
   check_backup_gap.py      台位费备份缺口检查/补录
@@ -259,6 +330,9 @@ scripts/
   migrate_backups_to_backup_db.py  旧备份迁移到独立备份库
 
 tests/
+  test_local_cache.py      缓存命中、TTL、版本号和写后失效测试
+  test_flash_sale_queue.py 发牌、并发、重试、退牌与 API 契约测试
+  test_flash_sale_mysql.py 热点抢购真实库异步落库与双路同步测试
   test_decimal_money.py    金额计算和 JSON 序列化测试
   test_product_backup.py   商品备份数据组装测试
   test_mysql_write.py      底层写函数事务回滚冒烟
@@ -367,6 +441,9 @@ python -m backend.outbox_worker --once
 | POST | `/orders/unpaid` | 创建未支付订单 |
 | POST | `/payments/confirm` | 确认收款 |
 | POST | `/products/consumption` | 加商品消费，必须带 `Idempotency-Key` 请求头 |
+| POST | `/flash-sale/products/consume` | 抢单件商品牌，异步扣库存 |
+| POST | `/flash-sale/tables/open` | 抢空闲桌台牌，异步开台 |
+| GET | `/flash-sale/tickets/{ticket_id}` | 查询热点任务最终状态 |
 
 请求体和查询参数由 Pydantic 模型与 FastAPI `Query` 约束校验；校验失败返回 HTTP 422
 （JSON 语法错误返回 400），响应仍是四键结构。业务错误按 `error_type`
@@ -390,7 +467,7 @@ Pydantic 只检查请求形状和字段边界；桌台是否空闲、库存是�
 
 ```powershell
 python -m compileall -q backend tests scripts
-python -m unittest tests.test_api_errors tests.test_request_schemas tests.test_id_utils tests.test_decimal_money tests.test_product_backup tests.test_table_exists_check tests.test_idempotency tests.test_open_table_unique
+python -m unittest tests.test_api_errors tests.test_request_schemas tests.test_id_utils tests.test_decimal_money tests.test_product_backup tests.test_table_exists_check tests.test_idempotency tests.test_open_table_unique tests.test_open_table_unsettled tests.test_local_cache tests.test_flash_sale_queue
 
 cd frontend
 node --check app.js
@@ -438,6 +515,18 @@ $env:MYSQL_DATABASE = "billiards_hall_test"
 $env:MYSQL_BACKUP_DATABASE = "billiards_backup_test"
 $env:ALLOW_WRITE_TESTS = "1"
 python tests/test_full_flow.py
+```
+
+### 热点抢购异步落库真实库测试
+
+该脚本会真实写入测试库，验证 5 张商品牌、1 张桌台牌的高并发发牌，
+异步落库、库存精准扣减、退牌补偿以及老路关台后的桌台补牌：
+
+```powershell
+$env:MYSQL_DATABASE = "billiards_hall_test"
+$env:MYSQL_BACKUP_DATABASE = "billiards_backup_test"
+$env:ALLOW_WRITE_TESTS = "1"
+python tests/test_flash_sale_mysql.py
 ```
 
 ### 数据一致性巡检
@@ -490,6 +579,8 @@ python scripts/check_product_backup_gap.py --fix
 - 已有主库/备份库连接池，并记录了 `/frontend/refresh` 的改前/改后压测；
 - 已有 Pydantic 请求模型和 HTTP 错误状态码映射；
 - 已有毫秒时间 + 随机后缀的业务编号；
+- 已有商品目录和桌台配置的单进程 TTL 缓存、写后失效和版本号保护；
+- 已有进程内热点发牌、ticket 查询、单线程异步落库和失败退牌试验链路；
 - 已有 outbox 积压、死信和备份缺口检查脚本。
 
 以下能力仍未实现，不应在简历或对外介绍中写成已完成：
@@ -498,13 +589,16 @@ python scripts/check_product_backup_gap.py --fix
 - 真实支付回调（当前「确认收款」只记录状态，不执行扣款）；
 - 生产级监控、告警和部署验证；
 - `/health`、请求 ID 和慢查询日志；
-- 写路径的真实并发测试和多实例验证（目前只有 `/frontend/refresh` 的本机只读压测）；
+- 多实例和生产环境写路径验证（已有加商品扣库存接口的本机 1/10/25/50 并发
+  基线，但尚不能替代真实部署压测）；
 - 备份恢复演练；
 - AI 员工的运行代码、工具注册表、规则引擎和评测集（暂不推进）；
 - Redis、LangGraph、RAG 等 AI 应用组件（暂不纳入路线）。
 
 当前是单店、小数据量场景，库存、桌台和支付状态必须保持 MySQL 强一致。
 项目没有为了简历关键词把库存放进 Redis，也没有把业务日志塞进 outbox。
+本地缓存只保存允许短暂旧值的配置型读数据，库存扣减、桌台状态和支付状态仍以
+MySQL 事务为唯一事实源。
 
 ## 设计文档
 

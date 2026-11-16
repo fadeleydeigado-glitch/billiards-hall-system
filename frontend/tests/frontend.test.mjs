@@ -138,7 +138,7 @@ test("openTable sends confirm_unsettled only on confirmed retry", async () => {
     }
 });
 
-test("open table warning panel is wired into the dialog", async () => {
+test("live refresh, conflict guards and open warnings are wired into the page", async () => {
     const appSource = await readFile(
         new URL("../app.js", import.meta.url),
         "utf8"
@@ -149,9 +149,16 @@ test("open table warning panel is wired into the dialog", async () => {
     );
 
     assert.equal(appSource.includes("TableHasUnsettledConsumptions"), true);
+    assert.equal(appSource.includes("REFRESH_INTERVAL_MS = 4000"), true);
+    assert.equal(appSource.includes("pendingRefresh = true"), true);
+    assert.equal(appSource.includes('"visibilitychange"'), true);
+    assert.equal(appSource.includes("refreshAfterConflict"), true);
     assert.equal(appSource.includes("confirmOpenWithUnsettled"), true);
     assert.equal(indexSource.includes('v-if="openWarning.visible"'), true);
     assert.equal(indexSource.includes("@click=\"confirmOpenWithUnsettled\""), true);
+    assert.equal(indexSource.includes(':disabled="!canOpenTable"'), true);
+    assert.equal(indexSource.includes(':disabled="!canCloseTable"'), true);
+    assert.equal(indexSource.includes(':disabled="refreshButtonBusy"'), true);
 });
 
 test("idempotency keys are UUID-shaped and reused until cleared", () => {

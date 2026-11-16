@@ -80,16 +80,87 @@ from .outbox import (
     one_insert_outbox_event,
 )
 
+from . import local_cache
+from .flash_sale_queue import flash_sale_engine
 from .schemas import MAX_IDEMPOTENCY_KEY_LENGTH
 
 
 IDEMPOTENCY_OPERATION_ADD_PRODUCT = "add_product_consumption"
 
 
+def _load_with_local_cache(key, loader, success_message):
+    """按 Cache-Aside + 版本号回填读取配置型数据。
+
+    缓存故障只降级为查数据库，不向主业务抛异常。
+    """
+    cached_value = None
+    cache_version = 0
+
+    try:
+        cached_value, cache_version = local_cache.get_with_version(key)
+    except Exception:
+        # 正常情况下 local_cache 已自行吞掉异常；这里保留第二道防线。
+        cached_value = None
+        cache_version = 0
+
+    if cached_value is not None:
+        return {
+            "status": "success",
+            "error_type": None,
+            "data": cached_value,
+            "message": success_message
+        }
+
+    result = loader()
+    if result.get("status") == "success":
+        try:
+            local_cache.set_if_version(
+                key,
+                result.get("data"),
+                cache_version
+            )
+        except Exception:
+            pass
+
+    return result
+
+
+def _load_products_list_cached():
+    return _load_with_local_cache(
+        local_cache.PRODUCTS_LIST_KEY,
+        one_load_products_from_mysql,
+        "商品总表读取成功"
+    )
+
+
+def _load_billiards_tables_cached():
+    return _load_with_local_cache(
+        local_cache.TABLES_CONFIG_KEY,
+        one_load_billiards_tables_from_mysql,
+        "桌台配置表读取成功"
+    )
+
+
+def invalidate_products_cache_after_commit():
+    """商品新增、修改或库存变化提交成功后调用。"""
+    try:
+        local_cache.invalidate(local_cache.PRODUCTS_LIST_KEY)
+    except Exception:
+        pass
+
+
+def invalidate_tables_cache_after_commit():
+    """桌台配置或开台/关台状态提交成功后调用。"""
+    try:
+        local_cache.invalidate(local_cache.TABLES_CONFIG_KEY)
+    except Exception:
+        pass
+
+
 def check_table_exists(table_no) -> bool:
     # 最普通的桌号检查：查 billiards_tables，存在返回 True，不存在返回 False。
     # 数据库读取失败时抛 RuntimeError，避免把“数据库故障”误判成“桌子不存在”。
-    tables_result = one_load_billiards_tables_from_mysql()
+    tables_result = _load_billiards_tables_cached()
 
     if tables_result["status"] != "success":
         raise RuntimeError(tables_result["message"])
@@ -115,7 +186,7 @@ def three_get_frontend_products_data() -> dict:
 
     # ==================== 第一步：读取商品总表 ====================
 
-    products_result = one_load_products_from_mysql()
+    products_result = _load_products_list_cached()
 
     if products_result["status"] != "success":
         return products_result
@@ -383,7 +454,7 @@ def three_open_table(
 
         # ==================== 第一步：读桌台数据 ====================
 
-        tables_result = one_load_billiards_tables_from_mysql()
+        tables_result = _load_billiards_tables_cached()
 
         if tables_result["status"] != "success":
             return tables_result
@@ -556,6 +627,10 @@ def three_open_table(
         if transaction_result["status"] != "success":
             return transaction_result
 
+        # 事务已经 commit；此时才递增版本并删除桌台配置缓存。
+        invalidate_tables_cache_after_commit()
+        flash_sale_engine.on_table_opened(table_id)
+
         # ==================== 第九步：返回成功 ====================
 
         return {
@@ -719,6 +794,10 @@ def three_close_table(table_id: str, source: str = "人") -> dict:
 
         if transaction_result["status"] != "success":
             return transaction_result
+
+        # 事务已经 commit；此时才递增版本并删除桌台配置缓存。
+        invalidate_tables_cache_after_commit()
+        flash_sale_engine.on_table_closed(table_id)
 
         # ==================== 第十步：返回成功 ====================
 
@@ -1397,6 +1476,11 @@ def three_add_product_consumption(
 
         if transaction_result["status"] != "success":
             return transaction_result
+
+        # 事务已经 commit；库存已变化，删除整张商品列表缓存。
+        invalidate_products_cache_after_commit()
+        if source != "flash-sale":
+            flash_sale_engine.on_product_sold(product_id, product_count)
 
         # ==================== 第十一步：返回首次成功结果 ====================
 

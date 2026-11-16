@@ -28,11 +28,11 @@
                     <button
                         class="button button-light"
                         type="button"
-                        :disabled="isRefreshing"
+                        :disabled="refreshButtonBusy"
                         @click="refreshAll({ announce: true })"
                     >
-                        <span v-if="isRefreshing" class="spinner" aria-hidden="true"></span>
-                        {{ isRefreshing ? "刷新中" : "刷新数据" }}
+                        <span v-if="refreshButtonBusy" class="spinner" aria-hidden="true"></span>
+                        {{ refreshButtonBusy ? "刷新中" : "刷新数据" }}
                     </button>
                 </div>
             </header>
@@ -182,9 +182,9 @@
                                 <button
                                     class="button button-primary"
                                     type="button"
-                                    :disabled="!openWarning.canConfirm || actionBusy.open"
+                                    :disabled="!openWarning.canConfirm || !canOpenTable"
                                     @click="confirmOpenWithUnsettled"
-                                >{{ actionBusy.open ? "处理中…" : "仍然开台" }}</button>
+                                >{{ confirmOpenButtonLabel }}</button>
                             </div>
                         </section>
 
@@ -192,9 +192,10 @@
                             v-if="!openWarning.visible"
                             class="button button-primary"
                             type="submit"
-                            :disabled="actionBusy.open"
+                            :disabled="!canOpenTable"
+                            :title="selectedTable?.isOpen ? '该桌台正在使用中，请先关台' : ''"
                         >
-                            {{ actionBusy.open ? "处理中…" : "确认开台" }}
+                            {{ openButtonLabel }}
                         </button>
                     </form>
 
@@ -209,9 +210,10 @@
                         <button
                             class="button button-secondary"
                             type="submit"
-                            :disabled="actionBusy.close"
+                            :disabled="!canCloseTable"
+                            :title="selectedTable && !selectedTable.isOpen ? '该桌台当前空闲，无需关台' : ''"
                         >
-                            {{ actionBusy.close ? "处理中…" : "确认关台" }}
+                            {{ closeButtonLabel }}
                         </button>
                     </form>
 
@@ -295,7 +297,7 @@
                         <button
                             class="button button-primary"
                             type="submit"
-                            :disabled="!selectedProduct || actionBusy.addProduct"
+                            :disabled="!canSubmitProduct"
                         >
                             {{ actionBusy.addProduct ? "添加中…" : "添加商品" }}
                         </button>
